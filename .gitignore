@@ -1,0 +1,30 @@
+# 内部文档，不提交
+doc/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+
+# 环境变量与本地数据
+.env
+.env.*
+*.sqlite
+*.sqlite3
+*.db
+data/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

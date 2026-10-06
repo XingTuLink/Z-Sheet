@@ -1,0 +1,17 @@
+# Z-Sheet V0.1 — single backend service for the Foundation phase.
+# Frontend / reverse-proxy services are added when the renderer lands.
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    image: zsheet-backend:dev
+    ports:
+      - "8000:8000"
+    environment:
+      ZSHEET_DATA_DIR: /app/data
+    volumes:
+      - zsheet-data:/app/data
+
+volumes:
+  zsheet-data:

@@ -1,0 +1,168 @@
+version: "0.1"
+
+app:
+  name: "销售管理系统"
+  source:
+    files:
+      - "2026年销售台账.xlsx"
+
+entities:
+  - key: customer
+    name: "客户"
+    source:
+      file: "2026年销售台账.xlsx"
+      sheet: "Sheet1"
+
+    key_field: customer_name
+
+    fields:
+      - key: customer_name
+        name: "客户名称"
+        type: string
+        role: identifier
+        confidence: 0.98
+        needs_review: false
+
+      - key: region
+        name: "所属区域"
+        type: enum
+        role: dimension
+        values:
+          - "华东"
+          - "华南"
+          - "华北"
+          - "西南"
+        confidence: 0.61
+        needs_review: true
+        review_reason: "缺乏跨表验证"
+
+      - key: owner
+        name: "负责人"
+        type: string
+        role: dimension
+        confidence: 0.95
+        needs_review: false
+
+      - key: phone
+        name: "联系电话"
+        type: phone
+        role: text
+        confidence: 0.97
+        needs_review: false
+
+  - key: order
+    name: "订单"
+    source:
+      file: "2026年销售台账.xlsx"
+      sheet: "订单"
+
+    key_field: order_no
+
+    fields:
+      - key: order_no
+        name: "订单编号"
+        type: string
+        role: identifier
+        confidence: 0.96
+        needs_review: false
+
+      - key: customer_name
+        name: "客户名称"
+        type: string
+        role: dimension
+        confidence: 0.63
+        needs_review: true
+        review_reason: "列名一致，但源数据没有外键定义"
+
+      - key: amount
+        name: "金额"
+        type: money
+        role: measure
+        confidence: 0.98
+        needs_review: false
+
+      - key: order_date
+        name: "下单日期"
+        type: date
+        role: time
+        confidence: 0.97
+        needs_review: false
+
+links:
+  - key: customer_orders
+    from: customer
+    to: order
+    type: one_to_many
+    on:
+      from: customer_name
+      to: customer_name
+    confidence: 0.88
+    needs_review: true
+    review_reason: "仅凭列名与值重叠推断，无外键定义"
+
+metrics:
+  - key: total_amount
+    name: "订单总额"
+    entity: order
+    formula:
+      op: sum
+      field: amount
+    business_definition: "订单金额合计，不含退款"
+
+views:
+  - key: customer_list
+    entity: customer
+    kind: list
+    title: "客户"
+    columns:
+      - customer_name
+      - region
+      - owner
+      - phone
+    search:
+      - customer_name
+      - phone
+    filters:
+      - region
+      - owner
+
+  - key: customer_detail
+    entity: customer
+    kind: detail
+    title: "客户详情"
+    blocks:
+      - type: fields
+      - type: related_list
+        link: customer_orders
+        title: "最近订单"
+
+  - key: order_list
+    entity: order
+    kind: list
+    title: "订单"
+    columns:
+      - order_no
+      - customer_name
+      - amount
+      - order_date
+    search:
+      - order_no
+    filters:
+      - customer_name
+    sorts:
+      - field: order_date
+        dir: desc
+
+  - key: home_dashboard
+    kind: dashboard
+    title: "首页"
+    metrics:
+      - total_amount
+
+navigation:
+  - label: "首页"
+    view: home_dashboard
+  - label: "客户"
+    view: customer_list
+  - label: "订单"
+    view: order_list
