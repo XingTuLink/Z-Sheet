@@ -16,7 +16,9 @@ def test_sales_example_loads():
     model = model_from_yaml((EXAMPLES_DIR / "sales_management.yaml").read_text(encoding="utf-8"))
     assert {e.key for e in model.entities} == {"customer", "order"}
     assert model.links[0].on.from_ == "customer_name"
-    assert len(model.views) == 4
+    view_kinds = {v.kind for v in model.views}
+    assert view_kinds == {"list", "detail", "form", "dashboard"}
+    assert len(model.views) == 6
 
 
 def test_yaml_roundtrip_preserves_model():

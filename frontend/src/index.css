@@ -1,9 +1,27 @@
+/* Z-Sheet renderer design system: blue-white flat, 1px borders, 6-8px radius. */
+
 :root {
+  --color-primary: #22a0ff;
+  --color-primary-hover: #0e8ce6;
+  --color-primary-soft: #e8f5ff;
+  --color-primary-line: #bfe3ff;
+  --color-text: #263445;
+  --color-muted: #7b8a99;
+  --color-border: #dce7f2;
+  --color-border-strong: #c7d6e5;
+  --color-line: #edf2f7;
+  --color-bg: #f4f8fc;
+  --color-head: #f7fafd;
+  --color-danger: #d9534f;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+
   font-family:
     -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
     'Microsoft YaHei', sans-serif;
-  color: #1a1a1a;
-  background: #f7f9fc;
+  font-size: 14px;
+  color: var(--color-text);
+  background: var(--color-bg);
 }
 
 * {
@@ -13,4 +31,359 @@
 body {
   margin: 0;
   min-height: 100vh;
+}
+
+h1,
+h2 {
+  margin: 0;
+  font-weight: 600;
+}
+
+a {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* ---------- bootstrap gate ---------- */
+
+.gate {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.gate-card {
+  width: 420px;
+  max-width: 100%;
+  text-align: center;
+  padding: 32px;
+}
+
+.gate-brand {
+  color: var(--color-primary);
+  font-size: 22px;
+  margin-bottom: 12px;
+}
+
+/* ---------- shell ---------- */
+
+.topbar {
+  background: #ffffff;
+  border-bottom: 1px solid var(--color-border);
+  padding: 0 28px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 32px;
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.brand-name {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--color-primary);
+}
+
+.brand-app {
+  font-size: 13px;
+  color: var(--color-muted);
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+}
+
+.nav-link {
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 14px;
+  color: var(--color-text);
+  border-bottom: 2px solid transparent;
+  font-size: 14px;
+}
+
+.nav-link:hover {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+.nav-link.active {
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+  font-weight: 600;
+}
+
+.content {
+  padding: 28px;
+}
+
+/* ---------- view scaffolding ---------- */
+
+.view {
+  max-width: 1080px;
+  margin: 0 auto;
+}
+
+.view-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.view-header h1 {
+  font-size: 20px;
+}
+
+.view-sub {
+  margin: 4px 0 0;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.back-link {
+  display: inline-block;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+.card {
+  background: #ffffff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.muted {
+  color: var(--color-muted);
+}
+
+/* ---------- buttons ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 34px;
+  padding: 0 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.btn:hover {
+  text-decoration: none;
+}
+
+.btn-primary {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #ffffff;
+}
+
+.btn-primary:hover {
+  background: var(--color-primary-hover);
+  border-color: var(--color-primary-hover);
+}
+
+.btn-secondary {
+  background: #ffffff;
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
+}
+
+.btn-secondary:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+/* ---------- list grid ---------- */
+
+.grid-card {
+  overflow: hidden;
+}
+
+.grid {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.grid th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--color-muted);
+  background: var(--color-head);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.grid td {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--color-line);
+  vertical-align: middle;
+}
+
+.grid tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.grid tbody tr:hover {
+  background: #f5faff;
+}
+
+.row-link {
+  font-weight: 600;
+}
+
+.tag {
+  display: inline-block;
+  padding: 1px 8px;
+  border: 1px solid var(--color-primary-line);
+  border-radius: 4px;
+  background: var(--color-primary-soft);
+  color: #0b78c3;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.empty {
+  padding: 48px 16px;
+  text-align: center;
+  color: var(--color-muted);
+}
+
+/* ---------- detail ---------- */
+
+.detail-grid {
+  margin: 0;
+  padding: 8px 20px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 32px;
+}
+
+.detail-item {
+  display: flex;
+  gap: 16px;
+  padding: 12px 4px;
+  border-bottom: 1px solid var(--color-line);
+}
+
+.detail-item:last-child,
+.detail-item:nth-last-child(2):nth-child(odd) {
+  border-bottom: none;
+}
+
+.detail-item dt {
+  flex: 0 0 96px;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.detail-item dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.placeholder-card {
+  padding: 20px 24px;
+}
+
+.placeholder-card + .placeholder-card,
+.view .placeholder-card:not(:first-child) {
+  margin-top: 16px;
+}
+
+.placeholder-card h2 {
+  font-size: 15px;
+  margin-bottom: 6px;
+}
+
+.view > .placeholder-card {
+  padding: 32px;
+}
+
+/* ---------- form ---------- */
+
+.notice {
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  border: 1px solid var(--color-primary-line);
+  border-radius: var(--radius-md);
+  background: var(--color-primary-soft);
+  color: #0b5e9b;
+  font-size: 13px;
+}
+
+.form-card {
+  padding: 24px;
+  max-width: 560px;
+}
+
+.form-item {
+  margin-bottom: 18px;
+}
+
+.form-item label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.required {
+  color: var(--color-danger);
+}
+
+.control {
+  width: 100%;
+  height: 36px;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--color-text);
+  background: #ffffff;
+}
+
+.control:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(34, 160, 255, 0.15);
+}
+
+.control.invalid {
+  border-color: var(--color-danger);
+}
+
+.field-error {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--color-danger);
+}
+
+.form-actions {
+  display: flex;
+  gap: 12px;
+  padding-top: 4px;
 }

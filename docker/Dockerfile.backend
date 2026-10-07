@@ -1,6 +1,20 @@
-# Z-Sheet backend image — multi-stage build with uv.
-# Python is pinned to 3.12 to match the frozen design-doc toolchain.
-# Only classic Dockerfile syntax is used, so no external frontend image is needed.
+# Z-Sheet image — multi-stage build with uv (backend) and pnpm (frontend).
+# Python is pinned to 3.12 and Node to 24 to match the frozen toolchain.
+# The runtime stage is a single container: FastAPI serves the API and the
+# built SPA (StaticFiles with client-side route fallback).
+
+FROM node:24-slim AS frontend-builder
+
+WORKDIR /app/frontend
+
+RUN corepack enable && corepack prepare pnpm@12.9.1 --activate
+
+# Install dependencies first for better layer caching.
+COPY frontend/package.json frontend/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+
+COPY frontend ./
+RUN pnpm build
 
 FROM python:3.12-slim AS builder
 
@@ -29,6 +43,8 @@ RUN useradd --create-home --uid 1000 app \
 
 WORKDIR /app
 COPY --from=builder --chown=app:app /app /app
+COPY --from=frontend-builder --chown=app:app /app/frontend/dist ./frontend_dist
+COPY --chown=app:app examples ./examples
 
 ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONUNBUFFERED=1 \

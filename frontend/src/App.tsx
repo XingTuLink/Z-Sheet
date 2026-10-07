@@ -1,65 +1,53 @@
-import { useQuery } from '@tanstack/react-query'
-import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom'
 
-import { fetchHealth } from './api/health'
-import './App.css'
+import { AppLayout } from './renderer/AppLayout'
+import { ViewResolver } from './renderer/ViewResolver'
+import { findViewByKey } from './renderer/resolve'
+import { useRuntime } from './renderer/useRuntime'
 
-function HealthPage() {
-  const { data, isLoading, isError, isFetching, refetch } = useQuery({
-    queryKey: ['health'],
-    queryFn: fetchHealth,
-    retry: false,
-  })
-
-  return (
-    <main className="page">
-      <h1>Z-Sheet</h1>
-      <p className="subtitle">前后端联调骨架 · Day 2</p>
-
-      <section className="card">
-        <h2>后端连接状态</h2>
-        {isLoading && <p className="muted">检查中…</p>}
-        {isError && (
-          <p className="status">
-            <span className="dot dot-error" />
-            无法连接后端（请确认后端已在 localhost:8000 启动）
-          </p>
-        )}
-        {data && (
-          <>
-            <p className="status">
-              <span className="dot dot-ok" />
-              API 正常
-            </p>
-            <dl className="meta">
-              <div>
-                <dt>状态</dt>
-                <dd>{data.status}</dd>
-              </div>
-              <div>
-                <dt>版本</dt>
-                <dd>{data.version}</dd>
-              </div>
-              <div>
-                <dt>数据库</dt>
-                <dd>{data.database}</dd>
-              </div>
-            </dl>
-          </>
-        )}
-        <button type="button" onClick={() => void refetch()} disabled={isFetching}>
-          {isFetching ? '检查中…' : '重新检查'}
-        </button>
+function IndexRoute() {
+  const { bootstrap } = useRuntime()
+  const first = bootstrap.model.navigation[0]
+  if (!first) {
+    return (
+      <section className="view">
+        <div className="card">
+          <h1>未配置页面</h1>
+          <p className="muted">当前模型没有声明任何导航项。</p>
+        </div>
       </section>
-    </main>
-  )
+    )
+  }
+  return <Navigate to={`/views/${first.view}`} replace />
+}
+
+function ViewRoute() {
+  const { bootstrap } = useRuntime()
+  const { viewKey } = useParams<{ viewKey: string }>()
+  const view = viewKey ? findViewByKey(bootstrap.model, viewKey) : undefined
+
+  if (!view) {
+    return (
+      <section className="view">
+        <div className="card">
+          <h1>页面不存在</h1>
+          <p className="muted">模型中找不到视图「{viewKey ?? ''}」。</p>
+        </div>
+      </section>
+    )
+  }
+  return <ViewResolver view={view} />
 }
 
 export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<HealthPage />} />
+        <Route path="/" element={<AppLayout />}>
+          <Route index element={<IndexRoute />} />
+          <Route path="views/:viewKey" element={<ViewRoute />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Route>
       </Routes>
     </BrowserRouter>
   )

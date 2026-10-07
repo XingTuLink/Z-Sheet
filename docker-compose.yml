@@ -1,5 +1,5 @@
-# Z-Sheet V0.1 — single backend service for the Foundation phase.
-# Frontend / reverse-proxy services are added when the renderer lands.
+# Z-Sheet — single container for the Foundation phase.
+# FastAPI serves both the API (/api/*) and the built renderer SPA at :8000.
 services:
   backend:
     build:

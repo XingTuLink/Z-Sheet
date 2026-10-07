@@ -1,0 +1,60 @@
+# Demo records for sales_management.yaml (Day 4 renderer milestone).
+# Shape: { entity_key: [ { field_key: value, ... }, ... ] }
+# This is seed data only; runtime persistence (CRUD) lands in a later phase.
+# Keys must match the Business Model; values follow the declared field types.
+
+customer:
+  - customer_name: "杭州明远科技有限公司"
+    region: "华东"
+    owner: "王敏"
+    phone: "138-0571-2233"
+  - customer_name: "广州新禾商贸有限公司"
+    region: "华南"
+    owner: "陈立"
+    phone: "139-0208-6617"
+  - customer_name: "北京北辰制造有限公司"
+    region: "华北"
+    owner: "赵倩"
+    phone: "137-0102-9045"
+  - customer_name: "成都远山连锁有限公司"
+    region: "西南"
+    owner: "周航"
+    phone: "136-0288-3182"
+  - customer_name: "南京云锦零售有限公司"
+    region: "华东"
+    owner: "王敏"
+    phone: "135-0251-7760"
+
+order:
+  - order_no: "SO-2026-0008"
+    customer_name: "南京云锦零售有限公司"
+    amount: 46200
+    order_date: "2026-09-28"
+  - order_no: "SO-2026-0007"
+    customer_name: "成都远山连锁有限公司"
+    amount: 87350.5
+    order_date: "2026-09-21"
+  - order_no: "SO-2026-0006"
+    customer_name: "北京北辰制造有限公司"
+    amount: 215000
+    order_date: "2026-09-15"
+  - order_no: "SO-2026-0005"
+    customer_name: "广州新禾商贸有限公司"
+    amount: 18900
+    order_date: "2026-09-12"
+  - order_no: "SO-2026-0004"
+    customer_name: "杭州明远科技有限公司"
+    amount: 132600
+    order_date: "2026-09-09"
+  - order_no: "SO-2026-0003"
+    customer_name: "南京云锦零售有限公司"
+    amount: 9750
+    order_date: "2026-09-05"
+  - order_no: "SO-2026-0002"
+    customer_name: "广州新禾商贸有限公司"
+    amount: 64800
+    order_date: "2026-08-27"
+  - order_no: "SO-2026-0001"
+    customer_name: "杭州明远科技有限公司"
+    amount: 128000
+    order_date: "2026-08-20"

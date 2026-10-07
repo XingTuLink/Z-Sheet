@@ -153,6 +153,16 @@ views:
       - field: order_date
         dir: desc
 
+  - key: customer_form
+    entity: customer
+    kind: form
+    title: "新增客户"
+
+  - key: order_form
+    entity: order
+    kind: form
+    title: "新增订单"
+
   - key: home_dashboard
     kind: dashboard
     title: "首页"

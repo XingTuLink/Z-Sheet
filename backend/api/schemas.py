@@ -36,3 +36,12 @@ class VersionMeta(BaseModel):
 class VersionDetail(VersionMeta):
     snapshot: dict[str, Any]
     patch: list[dict[str, Any]] | None
+
+
+class RuntimeBootstrapResponse(BaseModel):
+    """Everything the deterministic renderer needs in one round trip."""
+
+    app_key: str
+    version: int
+    model: dict[str, Any]
+    records: dict[str, list[dict[str, Any]]]
