@@ -5,6 +5,7 @@ description = "Z-Sheet: turn an Excel/CSV file into a usable business web app vi
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "alembic>=1.20.0",
     "fastapi>=0.142.2",
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.15.0",
@@ -39,6 +40,8 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+# B008: FastAPI's Depends()/Query() in argument defaults is the framework pattern.
+ignore = ["B008"]
 
 [tool.pyright]
 include = ["backend", "tests"]
