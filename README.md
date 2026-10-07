@@ -21,6 +21,7 @@ Excel / CSV
 - Business Model Schema（实体 / 字段 / 关系 / 指标 / 视图）与 YAML 导入、导出
 - 模型版本化存储（Alembic 迁移、Snapshot、JSON Patch、三层校验）
 - 文件解析 API：`.xlsx`（多 Sheet）与 `.csv`，Sheet 发现、表头行定位、UTF-8/UTF-16/GB18030 编码兼容（暂为无状态接口，尚无上传界面）
+- 列画像：空值率、distinct/唯一/重复统计、高频值 Top 5、整行重复数，以及确定性等距采样（为类型推断与预览供数）
 - 确定性 Renderer 第一版：
   - **List**：按模型声明的列渲染表格
   - **Detail**：字段详情
