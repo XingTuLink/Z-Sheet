@@ -109,15 +109,21 @@ def profile_sheet(sheet: ParsedSheet, sample_size: int = DEFAULT_SAMPLE_SIZE) ->
 def add_profiles(
     workbook: ParsedWorkbook, sample_size: int = DEFAULT_SAMPLE_SIZE
 ) -> ProfiledParsedWorkbook:
-    """Attach a profile (incl. deterministic sample) to every parsed sheet."""
+    """Attach profile and deterministic type inference to every parsed sheet."""
+    from .type_inference import infer_sheet
+
+    enriched: list[ProfiledParsedSheet] = []
+    for sheet in workbook.sheets:
+        profile = profile_sheet(sheet, sample_size)
+        enriched.append(
+            ProfiledParsedSheet(
+                **sheet.model_dump(),
+                profile=profile,
+                inferred_fields=infer_sheet(sheet, profile) if not sheet.is_empty else [],
+            )
+        )
     return ProfiledParsedWorkbook(
         file_name=workbook.file_name,
         file_type=workbook.file_type,
-        sheets=[
-            ProfiledParsedSheet(
-                **sheet.model_dump(),
-                profile=profile_sheet(sheet, sample_size),
-            )
-            for sheet in workbook.sheets
-        ],
+        sheets=enriched,
     )

@@ -6,12 +6,20 @@ profiles; enum inference in particular reads top_values directly).
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from backend.ingestion.schemas import Cell, ParsedSheet
 
 DEFAULT_SAMPLE_SIZE = 100
 TOP_VALUES_LIMIT = 5
+
+# Confidence tiers frozen in design doc section 10.1 (V0.1).
+CONFIDENCE_HIGH = 0.85
+CONFIDENCE_MEDIUM = 0.60
+
+InferredFieldType = Literal["string", "number", "money", "date", "enum", "phone"]
 
 
 class ValueCount(BaseModel):
@@ -51,8 +59,20 @@ class SheetProfile(BaseModel):
     sample_strategy: str = "uniform-stride"
 
 
+class InferredField(BaseModel):
+    column: str
+    type: InferredFieldType
+    confidence: float
+    # Auto-derived from the frozen tiers; medium/low must enter the review
+    # queue. High-confidence items may be forced to review, never the reverse.
+    needs_review: bool
+    signals: list[str] = Field(default_factory=list)
+    enum_values: list[str] = Field(default_factory=list)
+
+
 class ProfiledParsedSheet(ParsedSheet):
     profile: SheetProfile
+    inferred_fields: list[InferredField] = Field(default_factory=list)
 
 
 class ProfiledParsedWorkbook(BaseModel):
