@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from backend.api.routes import health, models, runtime
+from backend.api.routes import health, ingestion, models, runtime
 from backend.config import PROJECT_VERSION, get_settings
 
 
@@ -59,6 +59,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(models.router)
     app.include_router(runtime.router)
+    app.include_router(ingestion.router)
 
     # Production-style single-container delivery: serve the built SPA from the
     # backend. Absent during `vite dev`, where the Vite proxy owns the UI.

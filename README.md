@@ -20,13 +20,14 @@ Excel / CSV
 
 - Business Model Schema（实体 / 字段 / 关系 / 指标 / 视图）与 YAML 导入、导出
 - 模型版本化存储（Alembic 迁移、Snapshot、JSON Patch、三层校验）
+- 文件解析 API：`.xlsx`（多 Sheet）与 `.csv`，Sheet 发现、表头行定位、UTF-8/UTF-16/GB18030 编码兼容（暂为无状态接口，尚无上传界面）
 - 确定性 Renderer 第一版：
   - **List**：按模型声明的列渲染表格
   - **Detail**：字段详情
   - **Form**：按字段类型生成表单与校验（演示环境为页面内数据）
 - 单容器交付：FastAPI 同时提供 API 与构建后的前端
 
-尚未提供：Excel 上传与解析、列表搜索/筛选/排序/分页、关联列表、数据持久化 CRUD、自然语言修改。这些是后续里程碑的内容。
+尚未提供：上传界面与 Excel → Business Model 的自动理解（解析之后的字段类型推断、实体/关系识别）、列表搜索/筛选/排序/分页、关联列表、数据持久化 CRUD、自然语言修改。这些是后续里程碑的内容。
 
 ## 快速开始（Docker）
 
