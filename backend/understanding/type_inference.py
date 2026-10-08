@@ -19,20 +19,15 @@ import re
 
 from backend.ingestion.schemas import Cell, ParsedSheet
 
+from .keywords import (
+    CATEGORY_NAME_KEYWORDS,
+    DATE_NAME_KEYWORDS,
+    LONG_TEXT_NAME_KEYWORDS,
+    MONEY_NAME_KEYWORDS,
+    PHONE_NAME_KEYWORDS,
+    has_keyword,
+)
 from .schemas import CONFIDENCE_HIGH, InferredField, SheetProfile
-
-# --- name keyword groups (matched case-insensitently as substrings) --------
-MONEY_NAME_KEYWORDS = (
-    "金额", "价格", "单价", "总价", "费用", "成本", "收入",
-    "工资", "薪资", "奖金", "报销", "amount", "price", "cost", "fee",
-    "salary", "income", "revenue", "total",
-)
-DATE_NAME_KEYWORDS = ("日期", "时间", "date", "time", "day")
-PHONE_NAME_KEYWORDS = ("电话", "手机", "联系", "phone", "mobile", "tel")
-CATEGORY_NAME_KEYWORDS = (
-    "状态", "类型", "类别", "分类", "区域", "地区", "级别", "等级", "性别",
-    "status", "state", "type", "category", "region", "level", "grade", "gender",
-)
 
 _CURRENCY_CHARS = "¥￥$€￠£"
 _PLAIN_NUMBER_RE = re.compile(r"^[+-]?\d+(?:\.\d+)?$")
@@ -57,11 +52,6 @@ ENUM_MAX_DISTINCT = 20
 ENUM_MAX_RATIO = 0.5
 ENUM_MIN_NON_NULL = 3
 MIN_ACCEPT_RATIO = 0.60
-
-
-def _has_keyword(name: str, keywords: tuple[str, ...]) -> bool:
-    lowered = name.lower()
-    return any(keyword.lower() in lowered for keyword in keywords)
 
 
 def is_number(value: str) -> bool:
@@ -155,15 +145,23 @@ def infer_field(
         and distinct_count <= ENUM_MAX_DISTINCT
         and distinct_count / non_null_total <= ENUM_MAX_RATIO
     )
-    category_name = _has_keyword(column, CATEGORY_NAME_KEYWORDS)
+    category_name = has_keyword(column, CATEGORY_NAME_KEYWORDS)
+    # 备注/描述-style columns repeat few values often ("老客户" x3) but are
+    # free text, never enums; the long-text name vetoes both enum branches.
+    long_text_name = has_keyword(column, LONG_TEXT_NAME_KEYWORDS)
     text_majority = r_number < 0.5
+    # Real enum values are short labels; distribution-only enum must not grab
+    # repeated long sentences (four identical remarks are still free text).
+    max_length = max((len(value) for value in sample), default=0)
+    avg_length = sum(len(value) for value in sample) / n
+    short_labels = max_length <= 16 and avg_length <= 8
 
     # Conflict priority: format-specific types first, then semantic/statistical.
 
     # 1. Date — calendar validation makes false positives extremely unlikely.
     if r_date >= MIN_ACCEPT_RATIO:
         signals = ["calendar_validated"]
-        if _has_keyword(column, DATE_NAME_KEYWORDS):
+        if has_keyword(column, DATE_NAME_KEYWORDS):
             signals.append("name_keyword:date")
         if r_date < 0.90:
             signals.append("mixed_values")
@@ -173,7 +171,7 @@ def infer_field(
     # swallowed by the numeric rule.
     if r_phone >= MIN_ACCEPT_RATIO:
         signals = ["phone_pattern"]
-        if _has_keyword(column, PHONE_NAME_KEYWORDS):
+        if has_keyword(column, PHONE_NAME_KEYWORDS):
             signals.append("name_keyword:phone")
         if r_phone < 0.90:
             signals.append("mixed_values")
@@ -181,7 +179,7 @@ def infer_field(
 
     # 3. Enum hinted by a category-style column name. Numeric status/level
     # columns (e.g. 状态 = 0/1) would otherwise become plain numbers.
-    if distribution_fits_enum and category_name:
+    if distribution_fits_enum and category_name and not long_text_name:
         confidence = 0.88 if text_majority else 0.75
         return _guess(
             column, "enum", confidence,
@@ -196,7 +194,7 @@ def infer_field(
         if r_money_symbol < 0.90:
             signals.append("mixed_values")
         return _guess(column, "money", _confidence_band(r_money_symbol), signals)
-    if r_number >= MIN_ACCEPT_RATIO and _has_keyword(column, MONEY_NAME_KEYWORDS):
+    if r_number >= MIN_ACCEPT_RATIO and has_keyword(column, MONEY_NAME_KEYWORDS):
         signals = ["name_keyword:money"]
         if r_number < 0.90:
             signals.append("mixed_values")
@@ -214,7 +212,12 @@ def infer_field(
 
     # 6. Enum by distribution alone — only when values are mostly non-numeric,
     # so low-cardinality measurement columns stay numbers.
-    if distribution_fits_enum and text_majority:
+    if (
+        distribution_fits_enum
+        and text_majority
+        and not long_text_name
+        and short_labels
+    ):
         return _guess(column, "enum", 0.75, ["low_cardinality_distribution"], enum_values)
 
     # 7. String fallback. Cleanly non-parseable free text is high confidence;

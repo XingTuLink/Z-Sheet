@@ -20,6 +20,9 @@ CONFIDENCE_HIGH = 0.85
 CONFIDENCE_MEDIUM = 0.60
 
 InferredFieldType = Literal["string", "number", "money", "date", "enum", "phone"]
+InferredFieldRole = Literal[
+    "identifier", "dimension", "measure", "time", "enum", "text"
+]
 
 
 class ValueCount(BaseModel):
@@ -68,6 +71,12 @@ class InferredField(BaseModel):
     needs_review: bool
     signals: list[str] = Field(default_factory=list)
     enum_values: list[str] = Field(default_factory=list)
+    # Semantic role (Day 9) is a second inference dimension with its own
+    # confidence; Day 11 model assembly combines the two.
+    role: InferredFieldRole = "text"
+    role_confidence: float = 0.0
+    role_needs_review: bool = True
+    role_signals: list[str] = Field(default_factory=list)
 
 
 class ProfiledParsedSheet(ParsedSheet):
