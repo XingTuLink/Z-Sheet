@@ -24,6 +24,7 @@ Excel / CSV
 - 列画像：空值率、distinct/唯一/重复统计、高频值 Top 5、整行重复数，以及确定性等距采样（为类型推断与预览供数）
 - 六类字段确定性类型推断：string / number / money / date / enum / phone，带置信度档位（≥0.85 已识别 / 0.60–0.85 建议确认 / <0.60 无法确定）、判定信号与 enum 候选值；无 AI，规则全部可测
 - 六类语义角色推断：identifier / dimension / measure / time / enum / text，独立置信度与审查标记（唯一值+标识列名定 identifier；金额/日期/电话机械映射；词类枚举为维度、代码枚举为 enum；长文本与短标签分列 text/dimension）
+- 实体识别：每表产出一个实体候选 customer / order / product（外加无法判定时诚实给 unknown），综合表名关键词与字段构成（订单=标识+流水金额+时间；商品=标识+单价/规格无时间轴；客户=标识+联系方式无流水无时间），名称与结构强冲突时降置信待确认，并给出 key_field
 - 确定性 Renderer 第一版：
   - **List**：按模型声明的列渲染表格
   - **Detail**：字段详情

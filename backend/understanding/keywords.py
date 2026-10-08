@@ -27,6 +27,47 @@ LONG_TEXT_NAME_KEYWORDS = (
 )
 
 
+# --- sheet-name keyword groups for Day 10 entity recognition ----------------
+# Compound names such as "客户订单明细" describe a transactional sheet, so the
+# order group is tested first by the entity engine.
+ORDER_SHEET_KEYWORDS = (
+    "订单", "销售", "采购", "出库", "入库", "送货", "发货", "退货", "交易",
+    "流水", "明细", "台账", "记录", "order", "sales", "sale", "purchase",
+    "transaction", "delivery",
+)
+CUSTOMER_SHEET_KEYWORDS = (
+    "客户", "顾客", "供应商", "供货商", "会员", "员工", "职员", "联系人",
+    "商家", "厂商", "customer", "client", "supplier", "vendor", "member",
+    "employee", "contact",
+)
+PRODUCT_SHEET_KEYWORDS = (
+    "商品", "产品", "物料", "货品", "货物", "单品", "product", "item",
+    "material", "goods", "sku",
+)
+
+# Field-level hints used to tell entity kinds apart by field composition.
+PRICE_NAME_KEYWORDS = ("单价", "价格", "售价", "price", "cost")
+QUANTITY_NAME_KEYWORDS = ("数量", "件数", "quantity", "qty", "count")
+CONTACT_NAME_KEYWORDS = (
+    "地址", "联系人", "address", "contact",
+) + PHONE_NAME_KEYWORDS
+PRODUCT_ATTR_KEYWORDS = (
+    "规格", "型号", "单位", "库存", "品牌", "条码", "spec", "model",
+    "unit", "stock", "brand", "barcode",
+)
+PARTY_ID_NAME_KEYWORDS = ("名称", "姓名", "name")
+
+# Default worksheet names carry no business evidence ("Sheet1", "表2").
+DEFAULT_SHEET_NAME_RE_PARTS = (r"sheet\s*\d*", r"worksheet\s*\d*", r"表\d*")
+
+ENTITY_KIND_LABELS = {
+    "order": "订单",
+    "customer": "客户",
+    "product": "商品",
+    "unknown": "未命名实体",
+}
+
+
 def has_keyword(name: str, keywords: tuple[str, ...]) -> bool:
     lowered = name.lower()
     return any(keyword.lower() in lowered for keyword in keywords)

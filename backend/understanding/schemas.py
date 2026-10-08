@@ -23,6 +23,7 @@ InferredFieldType = Literal["string", "number", "money", "date", "enum", "phone"
 InferredFieldRole = Literal[
     "identifier", "dimension", "measure", "time", "enum", "text"
 ]
+InferredEntityKind = Literal["customer", "order", "product", "unknown"]
 
 
 class ValueCount(BaseModel):
@@ -79,9 +80,27 @@ class InferredField(BaseModel):
     role_signals: list[str] = Field(default_factory=list)
 
 
+class InferredEntity(BaseModel):
+    """One entity candidate inferred from a single sheet (Day 10).
+
+    Candidate only: cross-sheet dedupe, key namespacing and link discovery
+    are Day 11. `unknown` is the honest result for sheets whose composition
+    matches none of the three V0.1 kinds (design 10-15).
+    """
+
+    source_sheet: str
+    key: InferredEntityKind
+    name: str
+    key_field: str | None
+    confidence: float
+    needs_review: bool
+    signals: list[str] = Field(default_factory=list)
+
+
 class ProfiledParsedSheet(ParsedSheet):
     profile: SheetProfile
     inferred_fields: list[InferredField] = Field(default_factory=list)
+    inferred_entity: InferredEntity | None = None
 
 
 class ProfiledParsedWorkbook(BaseModel):

@@ -109,7 +109,8 @@ def profile_sheet(sheet: ParsedSheet, sample_size: int = DEFAULT_SAMPLE_SIZE) ->
 def add_profiles(
     workbook: ParsedWorkbook, sample_size: int = DEFAULT_SAMPLE_SIZE
 ) -> ProfiledParsedWorkbook:
-    """Attach profile and deterministic type inference to every parsed sheet."""
+    """Attach profile plus type/role/entity inference to every parsed sheet."""
+    from .entity_inference import infer_entity
     from .role_inference import annotate_roles
     from .type_inference import infer_sheet
 
@@ -119,11 +120,13 @@ def add_profiles(
         inferred = infer_sheet(sheet, profile) if not sheet.is_empty else []
         if inferred:
             annotate_roles(inferred, profile)
+        entity = infer_entity(sheet, inferred) if inferred else None
         enriched.append(
             ProfiledParsedSheet(
                 **sheet.model_dump(),
                 profile=profile,
                 inferred_fields=inferred,
+                inferred_entity=entity,
             )
         )
     return ProfiledParsedWorkbook(
