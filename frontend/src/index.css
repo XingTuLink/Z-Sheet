@@ -129,6 +129,10 @@ a:hover {
   font-weight: 600;
 }
 
+.nav-link-right {
+  margin-left: auto;
+}
+
 .content {
   padding: 28px;
 }
@@ -386,4 +390,217 @@ a:hover {
   display: flex;
   gap: 12px;
   padding-top: 4px;
+}
+
+/* ---------- upload & parsing progress (Day 12) ---------- */
+
+.upload-card {
+  width: 560px;
+  max-width: 100%;
+  padding: 36px;
+}
+
+.upload-tagline {
+  margin: 0 0 22px;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.upload-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+
+.dropzone {
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-head);
+  padding: 40px 24px;
+  text-align: center;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+
+.dropzone:hover,
+.dropzone:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.dropzone.dragging {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.dropzone-title {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-primary);
+}
+
+.dropzone-sub {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-muted);
+}
+
+.upload-note {
+  margin: 16px 0 0;
+  font-size: 12px;
+  color: var(--color-muted);
+}
+
+.upload-demo {
+  margin: 18px 0 0;
+  font-size: 13px;
+}
+
+.stage-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  text-align: left;
+}
+
+.stage-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--color-line);
+  font-size: 14px;
+}
+
+.stage-item:last-child {
+  border-bottom: none;
+}
+
+.stage-item.pending {
+  color: var(--color-muted);
+}
+
+.stage-mark {
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 50%;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.stage-item.done .stage-mark {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: #ffffff;
+}
+
+.stage-item.active .stage-mark {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.stage-item.active .stage-label {
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.result-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.result-name {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.summary-grid {
+  margin: 0 0 16px;
+  padding: 4px 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--color-border);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.summary-item {
+  background: #ffffff;
+  padding: 14px 8px;
+  text-align: center;
+}
+
+.summary-item dt {
+  font-size: 12px;
+  color: var(--color-muted);
+  margin-bottom: 4px;
+}
+
+.summary-item dd {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--color-primary);
+}
+
+.result-entities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.result-notes {
+  text-align: left;
+  margin-bottom: 20px;
+}
+
+.result-notes-title {
+  margin: 0 0 6px;
+  font-weight: 600;
+}
+
+.result-notes ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.result-notes li {
+  margin: 4px 0;
+}
+
+.upload-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.error-notice {
+  border-color: #f0c4c3;
+  background: #fdf0f0;
+  color: var(--color-danger);
+  text-align: left;
+  margin-bottom: 20px;
+}
+
+.error-notice p {
+  margin: 0;
 }

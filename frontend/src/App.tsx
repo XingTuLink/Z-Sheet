@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom'
 
+import { UploadPage } from './pages/UploadPage'
 import { AppLayout } from './renderer/AppLayout'
 import { ViewResolver } from './renderer/ViewResolver'
 import { findViewByKey } from './renderer/resolve'
@@ -18,7 +19,7 @@ function IndexRoute() {
       </section>
     )
   }
-  return <Navigate to={`/views/${first.view}`} replace />
+  return <Navigate to={`/app/views/${first.view}`} replace />
 }
 
 function ViewRoute() {
@@ -43,11 +44,14 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<AppLayout />}>
+        {/* Day 12: the first screen is upload + understanding progress. */}
+        <Route path="/" element={<UploadPage />} />
+        {/* Bundled demo runtime lives under /app. */}
+        <Route path="/app" element={<AppLayout />}>
           <Route index element={<IndexRoute />} />
           <Route path="views/:viewKey" element={<ViewRoute />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
   )

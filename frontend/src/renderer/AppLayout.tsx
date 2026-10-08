@@ -54,7 +54,7 @@ export function AppLayout() {
             {data.model.navigation.map((item) => (
               <NavLink
                 key={item.view}
-                to={`/views/${item.view}`}
+                to={`/app/views/${item.view}`}
                 className={({ isActive }) =>
                   isActive ? 'nav-link active' : 'nav-link'
                 }
@@ -63,6 +63,9 @@ export function AppLayout() {
               </NavLink>
             ))}
           </nav>
+          <NavLink to="/" className="nav-link nav-link-right">
+            上传表格
+          </NavLink>
         </header>
         <main className="content">
           <Outlet />
