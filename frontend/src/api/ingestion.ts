@@ -45,6 +45,11 @@ export interface UnderstandingField {
   type: FieldType
   role: FieldRole
   values?: string[] | null
+  // Design 10.1: every inference carries a confidence tier and an explicit
+  // review flag (medium/low confidence always needs review).
+  confidence: number
+  needs_review: boolean
+  review_reason?: string | null
 }
 
 /** Sheet-level summary the Understanding page browses (Day 13). */
@@ -96,6 +101,8 @@ export function saveUnderstandingResult(result: UnderstandingResult): boolean {
   }
   try {
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(slim))
+    // A new file invalidates every prior review decision.
+    sessionStorage.removeItem(REVIEW_KEY)
     return true
   } catch {
     return false
@@ -109,6 +116,58 @@ export function loadUnderstandingResult(): UnderstandingResult | null {
     return JSON.parse(raw) as UnderstandingResult
   } catch {
     return null
+  }
+}
+
+/**
+ * Day 14 local review decisions. Persisted only in sessionStorage until the
+ * Day 15 Confirm flow writes the corrected model server-side; nothing here
+ * mutates the inferred confidence (design 10.1 forbids relabelling medium/low
+ * confidence as certain — an acknowledgement is a human action, not a new
+ * inference).
+ */
+export type ReviewDecision = 'accepted' | 'rejected'
+
+export interface LinkReview {
+  // Undefined while the user has only edited the on-field mapping but not yet
+  // accepted or rejected the relation.
+  decision?: ReviewDecision
+  on_from: string
+  on_to: string
+}
+
+export interface ReviewState {
+  // Acknowledged entities/fields: `${entityKey}` or `${entityKey}.${fieldKey}`.
+  acknowledged: Record<string, boolean>
+  links: Record<string, LinkReview>
+}
+
+const REVIEW_KEY = 'zs-review-state'
+
+export function emptyReviewState(): ReviewState {
+  return { acknowledged: {}, links: {} }
+}
+
+export function loadReviewState(): ReviewState {
+  const raw = sessionStorage.getItem(REVIEW_KEY)
+  if (!raw) return emptyReviewState()
+  try {
+    const parsed = JSON.parse(raw) as Partial<ReviewState>
+    return {
+      acknowledged: parsed.acknowledged ?? {},
+      links: parsed.links ?? {},
+    }
+  } catch {
+    return emptyReviewState()
+  }
+}
+
+export function saveReviewState(state: ReviewState): void {
+  try {
+    sessionStorage.setItem(REVIEW_KEY, JSON.stringify(state))
+  } catch {
+    // Session storage full/disabled: review actions simply do not survive a
+    // reload; the in-memory state still drives the current page.
   }
 }
 

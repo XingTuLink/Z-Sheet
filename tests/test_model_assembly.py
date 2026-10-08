@@ -217,6 +217,26 @@ def test_model_is_valid_with_three_entities_and_chinese_fields_mapped():
     assert region.type.value == "enum" and region.values == ["华东", "华北", "华南"]
 
 
+def test_child_side_join_fields_are_forced_to_medium_confidence_review():
+    # Design 7.1/10.2: even with perfect value overlap, a child-side column is
+    # only a *behavioural* foreign key — Excel carries no FK definition, so the
+    # field itself is never high-confidence and always enters the review queue.
+    result = _ledger()
+    model = _yaml_model(result)
+    order = next(e for e in model.entities if e.key == "order")
+
+    for field_key in ("customer_name", "product_name"):
+        field = next(f for f in order.fields if f.key == field_key)
+        assert field.confidence == 0.63
+        assert field.needs_review is True
+        assert field.review_reason == "列名一致，但源数据没有外键定义"
+
+    # The parent-side name fields are unaffected (they are real identifiers).
+    customer = next(e for e in model.entities if e.key == "customer")
+    parent_name = next(f for f in customer.fields if f.key == "customer_name")
+    assert parent_name.confidence >= 0.85 and parent_name.needs_review is False
+
+
 def test_metric_only_for_flow_money_and_views_reference_it():
     result = _ledger()
     model = _yaml_model(result)

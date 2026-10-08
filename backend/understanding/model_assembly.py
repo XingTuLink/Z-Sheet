@@ -50,6 +50,14 @@ from .schemas import InferredField, InferredLink, ProfiledParsedSheet, ProfiledP
 MAX_LIST_COLUMNS = 6
 MAX_FILTER_FIELDS = 4
 
+# A child-side column only *behaves* as a foreign key: Excel has no FK
+# constraint, so the join field itself is never high-confidence no matter how
+# clean the value overlap is (design 7.1 / 10.2 禁止假确定). Its confidence is
+# frozen at the medium tier and it always enters the review queue.
+FK_FIELD_CONFIDENCE = 0.63
+FK_FIELD_REASON_SAME_NAME = "列名一致，但源数据没有外键定义"
+FK_FIELD_REASON_SEMANTIC = "字段语义与父表对应，但源数据没有外键定义"
+
 _ROLE_ORDER = {
     "time": 0,
     "measure": 1,
@@ -110,7 +118,12 @@ def build_entity_plans(
     return plans, notes
 
 
-def _business_field(column: str, field_key: str, inferred: InferredField) -> BusinessField:
+def _business_field(
+    column: str,
+    field_key: str,
+    inferred: InferredField,
+    fk_review_reason: str | None = None,
+) -> BusinessField:
     ftype = inferred.type
     values = inferred.enum_values if ftype == "enum" else None
     if ftype == "enum" and not values:
@@ -119,22 +132,54 @@ def _business_field(column: str, field_key: str, inferred: InferredField) -> Bus
         ftype = "string"
         values = None
     confidence = min(inferred.confidence, inferred.role_confidence)
+    needs_review: bool | None = None
+    review_reason: str | None = None
+    if fk_review_reason is not None:
+        # This column is the child side of an inferred link: no real FK exists
+        # in the source, so freeze medium confidence and force review.
+        confidence = FK_FIELD_CONFIDENCE
+        needs_review = True
+        review_reason = fk_review_reason
     return BusinessField(
         key=field_key,
         name=column,
         type=FieldType(ftype),
         role=FieldRole(inferred.role),
         confidence=confidence,
+        needs_review=needs_review,
+        review_reason=review_reason,
         values=values,
     )
 
 
+def _fk_child_reasons(
+    links: list[InferredLink],
+) -> dict[tuple[str, str], str]:
+    """Map (child entity key, child on-field key) to its review reason."""
+    reasons: dict[tuple[str, str], str] = {}
+    for link in links:
+        reason = (
+            FK_FIELD_REASON_SAME_NAME
+            if "same_field_name" in link.signals
+            else FK_FIELD_REASON_SEMANTIC
+        )
+        reasons[(link.to_entity, link.on_to)] = reason
+    return reasons
+
+
 def _build_entity(
-    plan: EntityPlan, file_name: str
+    plan: EntityPlan,
+    file_name: str,
+    fk_child_reasons: dict[tuple[str, str], str],
 ) -> Entity:
     inferred_by_column = {field.column: field for field in plan.sheet.inferred_fields}
     fields = [
-        _business_field(column, field_key, inferred_by_column[column])
+        _business_field(
+            column,
+            field_key,
+            inferred_by_column[column],
+            fk_child_reasons.get((plan.key, field_key)),
+        )
         for column, field_key in plan.field_keys.items()
     ]
     return Entity(
@@ -320,7 +365,10 @@ def assemble_model(
     if not plans:
         return None
 
-    entities = [_build_entity(plan, workbook.file_name) for plan in plans]
+    fk_child_reasons = _fk_child_reasons(links)
+    entities = [
+        _build_entity(plan, workbook.file_name, fk_child_reasons) for plan in plans
+    ]
     entity_map = {plan.key: entity for plan, entity in zip(plans, entities, strict=True)}
     domain_links = _build_links(links)
     metrics, views, navigation = _build_views_and_metrics(plans, entity_map, domain_links)
