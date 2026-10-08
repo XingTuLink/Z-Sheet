@@ -2,7 +2,7 @@
 
 表格变系统 —— 上传一份 Excel/CSV，AI 将其理解为 Business Model（实体、字段、关系、指标、视图），再由**确定性 Renderer** 生成一个可以直接使用的小系统。数据全部留在你自己的环境中，不依赖任何云账号。
 
-> 状态：实验性开发中（Foundation 阶段）。当前里程碑：内置演示模型可直接渲染为可浏览的 Web 应用。
+> 状态：实验性开发中（Data Understanding 已完成）。当前里程碑：上传真实 Excel 即可自动理解为合法 Business Model（实体 / 字段 / 一对多关系 / 指标 / 视图，全部通过领域校验），上传确认界面开发中。
 
 ## 它如何工作
 
@@ -22,13 +22,18 @@ Excel / CSV
 - 模型版本化存储（Alembic 迁移、Snapshot、JSON Patch、三层校验）
 - 文件解析 API：`.xlsx`（多 Sheet）与 `.csv`，Sheet 发现、表头行定位、UTF-8/UTF-16/GB18030 编码兼容（暂为无状态接口，尚无上传界面）
 - 列画像：空值率、distinct/唯一/重复统计、高频值 Top 5、整行重复数，以及确定性等距采样（为类型推断与预览供数）
+- 六类字段确定性类型推断：string / number / money / date / enum / phone，带置信度档位（≥0.85 已识别 / 0.60–0.85 建议确认 / <0.60 无法确定）、判定信号与 enum 候选值；无 AI，规则全部可测
+- 六类语义角色推断：identifier / dimension / measure / time / enum / text，独立置信度与审查标记（唯一值+标识列名定 identifier；金额/日期/电话机械映射；词类枚举为维度、代码枚举为 enum；长文本与短标签分列 text/dimension）
+- 实体识别：每表产出一个实体候选 customer / order / product（外加无法判定时诚实给 unknown），综合表名关键词与字段构成（订单=标识+流水金额+时间；商品=标识+单价/规格无时间轴；客户=标识+联系方式无流水无时间），名称与结构强冲突时降置信待确认，并给出 key_field
+- 一对多关系推断（V0.1 仅此一种）：同名字段 + 值集合召回率/精确率 + 父侧唯一 / 子侧重复四重证据，四档置信度（0.88 / 0.75 / 0.75 异名语义 / 0.63 仅列名疑似外键）；两侧都唯一（一对一）不推断；无源 FK 定义，所有关系一律 `needs_review`，禁止假确定
+- Business Model 自动组装：中文列名映射 snake_case（词典外按位置兜底 `field_N`）、同类实体命名空间去重、枚举无候选值安全降级；自动生成流水金额 sum 指标（单价不汇总）与 list / detail / form / dashboard 视图、导航；产物逐字段通过领域层引用完整性校验并可 YAML 导出，能直接走模型导入接口持久化
 - 确定性 Renderer 第一版：
   - **List**：按模型声明的列渲染表格
   - **Detail**：字段详情
   - **Form**：按字段类型生成表单与校验（演示环境为页面内数据）
 - 单容器交付：FastAPI 同时提供 API 与构建后的前端
 
-尚未提供：上传界面与 Excel → Business Model 的自动理解（解析之后的字段类型推断、实体/关系识别）、列表搜索/筛选/排序/分页、关联列表、数据持久化 CRUD、自然语言修改。这些是后续里程碑的内容。
+尚未提供：上传界面与理解结果的人工确认/纠错（理解管线 API 已就绪）、列表搜索/筛选/排序/分页、关联列表、业务数据持久化 CRUD、自然语言修改。这些是后续里程碑的内容。
 
 ## 快速开始（Docker）
 
@@ -86,10 +91,11 @@ pnpm build
 
 ```text
 backend/domain      Business Model 与 Patch 的领域定义、序列化
+backend/understanding  解析后的理解管线：画像 → 类型 → 角色 → 实体 → 关系 → 模型组装
 backend/storage     SQLAlchemy 模型、仓储（模型版本）
 backend/patch       RFC 6902 子集的确定性 Patch 应用器
 backend/runtime     渲染运行时引导（model + data）
-backend/api         FastAPI 路由（模型管理 / 运行时）
+backend/api         FastAPI 路由（解析 / 模型管理 / 运行时）
 migrations          Alembic 迁移
 frontend/src/renderer  类型驱动的确定性渲染（View Resolver + 视图组件）
 examples            演示模型与种子数据

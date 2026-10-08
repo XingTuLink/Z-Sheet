@@ -109,15 +109,43 @@ def profile_sheet(sheet: ParsedSheet, sample_size: int = DEFAULT_SAMPLE_SIZE) ->
 def add_profiles(
     workbook: ParsedWorkbook, sample_size: int = DEFAULT_SAMPLE_SIZE
 ) -> ProfiledParsedWorkbook:
-    """Attach a profile (incl. deterministic sample) to every parsed sheet."""
-    return ProfiledParsedWorkbook(
-        file_name=workbook.file_name,
-        file_type=workbook.file_type,
-        sheets=[
+    """Run the full understanding pipeline and assemble a Business Model."""
+    from backend.domain.serialization import model_to_dict, model_to_yaml
+
+    from .entity_inference import infer_entity
+    from .link_inference import infer_links
+    from .model_assembly import assemble_model, build_entity_plans
+    from .role_inference import annotate_roles
+    from .type_inference import infer_sheet
+
+    enriched: list[ProfiledParsedSheet] = []
+    for sheet in workbook.sheets:
+        profile = profile_sheet(sheet, sample_size)
+        inferred = infer_sheet(sheet, profile) if not sheet.is_empty else []
+        if inferred:
+            annotate_roles(inferred, profile)
+        entity = infer_entity(sheet, inferred) if inferred else None
+        enriched.append(
             ProfiledParsedSheet(
                 **sheet.model_dump(),
-                profile=profile_sheet(sheet, sample_size),
+                profile=profile,
+                inferred_fields=inferred,
+                inferred_entity=entity,
             )
-            for sheet in workbook.sheets
-        ],
+        )
+
+    result = ProfiledParsedWorkbook(
+        file_name=workbook.file_name,
+        file_type=workbook.file_type,
+        sheets=enriched,
     )
+
+    # Workbook-level stage: entity plans -> links -> validated Business Model.
+    plans, notes = build_entity_plans(result)
+    result.assembly_notes = notes
+    result.inferred_links = infer_links(result, plans)
+    model = assemble_model(result, plans, result.inferred_links)
+    if model is not None:
+        result.business_model = model_to_dict(model)
+        result.business_model_yaml = model_to_yaml(model)
+    return result

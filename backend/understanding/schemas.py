@@ -6,12 +6,24 @@ profiles; enum inference in particular reads top_values directly).
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from backend.ingestion.schemas import Cell, ParsedSheet
 
 DEFAULT_SAMPLE_SIZE = 100
 TOP_VALUES_LIMIT = 5
+
+# Confidence tiers frozen in design doc section 10.1 (V0.1).
+CONFIDENCE_HIGH = 0.85
+CONFIDENCE_MEDIUM = 0.60
+
+InferredFieldType = Literal["string", "number", "money", "date", "enum", "phone"]
+InferredFieldRole = Literal[
+    "identifier", "dimension", "measure", "time", "enum", "text"
+]
+InferredEntityKind = Literal["customer", "order", "product", "unknown"]
 
 
 class ValueCount(BaseModel):
@@ -51,11 +63,75 @@ class SheetProfile(BaseModel):
     sample_strategy: str = "uniform-stride"
 
 
+class InferredField(BaseModel):
+    column: str
+    type: InferredFieldType
+    confidence: float
+    # Auto-derived from the frozen tiers; medium/low must enter the review
+    # queue. High-confidence items may be forced to review, never the reverse.
+    needs_review: bool
+    signals: list[str] = Field(default_factory=list)
+    enum_values: list[str] = Field(default_factory=list)
+    # Semantic role (Day 9) is a second inference dimension with its own
+    # confidence; Day 11 model assembly combines the two.
+    role: InferredFieldRole = "text"
+    role_confidence: float = 0.0
+    role_needs_review: bool = True
+    role_signals: list[str] = Field(default_factory=list)
+
+
+class InferredEntity(BaseModel):
+    """One entity candidate inferred from a single sheet (Day 10).
+
+    Candidate only: cross-sheet dedupe, key namespacing and link discovery
+    are Day 11. `unknown` is the honest result for sheets whose composition
+    matches none of the three V0.1 kinds (design 10-15).
+    """
+
+    source_sheet: str
+    key: InferredEntityKind
+    name: str
+    key_field: str | None
+    confidence: float
+    needs_review: bool
+    signals: list[str] = Field(default_factory=list)
+
+
 class ProfiledParsedSheet(ParsedSheet):
     profile: SheetProfile
+    inferred_fields: list[InferredField] = Field(default_factory=list)
+    inferred_entity: InferredEntity | None = None
+
+
+class InferredLink(BaseModel):
+    """One-to-many link candidate between two assembled entities (Day 11).
+
+    Direction: from_entity is the unique/parent side, to_entity the repeating
+    /child side. Design 11.3 evidence order: same field name, value-set
+    overlap, uniqueness, distribution, field semantics.
+    """
+
+    key: str
+    from_entity: str
+    to_entity: str
+    on_from: str
+    on_to: str
+    confidence: float
+    needs_review: bool
+    review_reason: str | None = None
+    signals: list[str] = Field(default_factory=list)
+    overlap_recall: float
+    overlap_precision: float
 
 
 class ProfiledParsedWorkbook(BaseModel):
     file_name: str
     file_type: str
     sheets: list[ProfiledParsedSheet]
+    inferred_links: list[InferredLink] = Field(default_factory=list)
+    # Validated Business Model (design chapter 7) plus its YAML form; None
+    # when no sheet could be assembled into an entity.
+    business_model: dict[str, object] | None = None
+    business_model_yaml: str | None = None
+    # Human-readable reasons sheets/links were dropped during assembly.
+    assembly_notes: list[str] = Field(default_factory=list)
