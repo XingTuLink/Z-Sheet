@@ -103,7 +103,35 @@ class ProfiledParsedSheet(ParsedSheet):
     inferred_entity: InferredEntity | None = None
 
 
+class InferredLink(BaseModel):
+    """One-to-many link candidate between two assembled entities (Day 11).
+
+    Direction: from_entity is the unique/parent side, to_entity the repeating
+    /child side. Design 11.3 evidence order: same field name, value-set
+    overlap, uniqueness, distribution, field semantics.
+    """
+
+    key: str
+    from_entity: str
+    to_entity: str
+    on_from: str
+    on_to: str
+    confidence: float
+    needs_review: bool
+    review_reason: str | None = None
+    signals: list[str] = Field(default_factory=list)
+    overlap_recall: float
+    overlap_precision: float
+
+
 class ProfiledParsedWorkbook(BaseModel):
     file_name: str
     file_type: str
     sheets: list[ProfiledParsedSheet]
+    inferred_links: list[InferredLink] = Field(default_factory=list)
+    # Validated Business Model (design chapter 7) plus its YAML form; None
+    # when no sheet could be assembled into an entity.
+    business_model: dict[str, object] | None = None
+    business_model_yaml: str | None = None
+    # Human-readable reasons sheets/links were dropped during assembly.
+    assembly_notes: list[str] = Field(default_factory=list)
