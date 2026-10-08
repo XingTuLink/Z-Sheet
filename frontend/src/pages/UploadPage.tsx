@@ -1,8 +1,9 @@
 import { useRef, useState, type ChangeEvent } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 
 import {
   parseWorkbookWithProgress,
+  saveUnderstandingResult,
   type StageEvent,
   type StageKey,
   type UnderstandingResult,
@@ -72,6 +73,7 @@ function isSupportedFile(file: File): boolean {
 }
 
 export function UploadPage() {
+  const navigate = useNavigate()
   const [phase, setPhase] = useState<Phase>('idle')
   const [stages, setStages] = useState<StageMap>(initialStages)
   const [fileName, setFileName] = useState('')
@@ -131,6 +133,7 @@ export function UploadPage() {
 
       const payload = await parseWorkbookWithProgress(file, onStage)
       patchStage('assemble', 'done')
+      saveUnderstandingResult(payload)
       setResult(payload)
       setPhase('done')
     } catch (error) {
@@ -273,13 +276,20 @@ export function UploadPage() {
               </div>
             )}
             <div className="upload-actions">
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => navigate('/understanding')}
+              >
+                查看理解结果
+              </button>
               <button type="button" className="btn btn-secondary" onClick={reset}>
                 再上传一个文件
               </button>
-              <Link to="/app" className="btn btn-secondary">
-                查看演示系统
-              </Link>
             </div>
+            <p className="upload-demo">
+              想先看渲染效果？<Link to="/app">查看内置演示系统</Link>
+            </p>
           </>
         )}
 

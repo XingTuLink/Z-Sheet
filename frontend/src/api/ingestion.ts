@@ -11,20 +11,61 @@ export interface StageEvent {
   count: number
 }
 
+export type FieldType = 'string' | 'number' | 'money' | 'date' | 'enum' | 'phone'
+export type FieldRole =
+  | 'identifier'
+  | 'dimension'
+  | 'measure'
+  | 'time'
+  | 'enum'
+  | 'text'
+
 export interface InferredLink {
   key: string
+  from_entity: string
+  to_entity: string
+  on_from: string
+  on_to: string
   confidence: number
   needs_review: boolean
+  review_reason?: string | null
 }
 
 export interface UnderstandingEntity {
   key: string
   name: string
+  key_field: string
+  source?: { file: string; sheet?: string | null } | null
+  fields: UnderstandingField[]
+}
+
+export interface UnderstandingField {
+  key: string
+  name: string
+  type: FieldType
+  role: FieldRole
+  values?: string[] | null
+}
+
+/** Sheet-level summary the Understanding page browses (Day 13). */
+export interface UnderstandingSheet {
+  name: string
+  is_empty: boolean
+  columns: string[]
+  profile: { row_count: number }
+  inferred_entity: {
+    key: string
+    name: string
+    key_field: string | null
+    confidence: number
+    needs_review: boolean
+  } | null
 }
 
 export interface UnderstandingResult {
   file_name: string
   file_type: string
+  sheets: UnderstandingSheet[]
   assembly_notes: string[]
   inferred_links: InferredLink[]
   business_model: {
@@ -33,6 +74,42 @@ export interface UnderstandingResult {
     metrics: unknown[]
   } | null
   business_model_yaml: string | null
+}
+
+const STORAGE_KEY = 'zs-understanding-result'
+
+/**
+ * Persist the understanding result for the Understanding page. Row data and
+ * frequency samples are structural noise for browsing and can blow the
+ * sessionStorage quota, so only sheet-level understanding output is kept.
+ */
+export function saveUnderstandingResult(result: UnderstandingResult): boolean {
+  const slim: UnderstandingResult = {
+    ...result,
+    sheets: result.sheets.map((sheet) => ({
+      name: sheet.name,
+      is_empty: sheet.is_empty,
+      columns: sheet.columns,
+      profile: { row_count: sheet.profile.row_count },
+      inferred_entity: sheet.inferred_entity,
+    })),
+  }
+  try {
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(slim))
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function loadUnderstandingResult(): UnderstandingResult | null {
+  const raw = sessionStorage.getItem(STORAGE_KEY)
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as UnderstandingResult
+  } catch {
+    return null
+  }
 }
 
 /**

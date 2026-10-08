@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom'
 
+import { UnderstandingPage } from './pages/UnderstandingPage'
 import { UploadPage } from './pages/UploadPage'
 import { AppLayout } from './renderer/AppLayout'
 import { ViewResolver } from './renderer/ViewResolver'
@@ -46,6 +47,8 @@ export default function App() {
       <Routes>
         {/* Day 12: the first screen is upload + understanding progress. */}
         <Route path="/" element={<UploadPage />} />
+        {/* Day 13: structured browse of the understanding result. */}
+        <Route path="/understanding" element={<UnderstandingPage />} />
         {/* Bundled demo runtime lives under /app. */}
         <Route path="/app" element={<AppLayout />}>
           <Route index element={<IndexRoute />} />
