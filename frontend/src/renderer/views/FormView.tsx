@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 
+import { resolveAppRoute } from '../appRoute'
 import { findViewForEntity, getEntity, getField } from '../resolve'
 import type {
   BusinessField,
@@ -57,6 +58,7 @@ function FormControl({
 export function FormView({ view }: { view: FormViewModel }) {
   const { bootstrap, records, addRecord } = useRuntime()
   const navigate = useNavigate()
+  const { basePath } = resolveAppRoute(useLocation().pathname)
   const model = bootstrap.model
 
   const maybeEntity = getEntity(model, view.entity)
@@ -80,7 +82,7 @@ export function FormView({ view }: { view: FormViewModel }) {
     .map((key) => getField(entity, key))
     .filter((field): field is BusinessField => Boolean(field))
   const listView = findViewForEntity(model, view.entity, 'list')
-  const cancelTarget = listView ? `/views/${listView.key}` : '/'
+  const cancelTarget = listView ? `${basePath}/views/${listView.key}` : basePath
 
   function setField(key: string, raw: string) {
     setValues((previous) => ({ ...previous, [key]: raw }))
@@ -129,7 +131,7 @@ export function FormView({ view }: { view: FormViewModel }) {
     }
 
     addRecord(entity.key, row)
-    navigate(listView ? `/views/${listView.key}` : '/')
+    navigate(listView ? `${basePath}/views/${listView.key}` : basePath)
   }
 
   return (

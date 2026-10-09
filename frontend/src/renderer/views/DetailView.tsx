@@ -1,5 +1,6 @@
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useSearchParams } from 'react-router-dom'
 
+import { resolveAppRoute } from '../appRoute'
 import { formatCell } from '../format'
 import { findViewForEntity, getEntity } from '../resolve'
 import { useRuntime } from '../useRuntime'
@@ -9,6 +10,7 @@ export function DetailView({ view }: { view: DetailViewModel }) {
   const { bootstrap, records } = useRuntime()
   const model = bootstrap.model
   const [searchParams] = useSearchParams()
+  const { basePath } = resolveAppRoute(useLocation().pathname)
   const id = searchParams.get('id') ?? ''
 
   const entity = getEntity(model, view.entity)
@@ -34,7 +36,7 @@ export function DetailView({ view }: { view: DetailViewModel }) {
       <header className="view-header">
         <div>
           {listView && (
-            <Link className="back-link" to={`/views/${listView.key}`}>
+            <Link className="back-link" to={`${basePath}/views/${listView.key}`}>
               返回{listView.title}
             </Link>
           )}
@@ -50,7 +52,7 @@ export function DetailView({ view }: { view: DetailViewModel }) {
             {listView && (
               <>
                 {' '}
-                回到<Link to={`/views/${listView.key}`}>{listView.title}</Link>。
+                回到<Link to={`${basePath}/views/${listView.key}`}>{listView.title}</Link>。
               </>
             )}
           </p>
