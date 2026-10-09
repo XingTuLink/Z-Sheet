@@ -85,6 +85,43 @@ def import_model(
     return record
 
 
+def upsert_model(
+    db: Session,
+    app_key: str,
+    model: BusinessModel,
+    *,
+    operator: str = "local",
+    source_request: str | None = None,
+) -> ModelVersionRecord:
+    """Persist a fully re-assembled model (Day 15 Confirm).
+
+    Unlike ``import_model`` this never raises ``AppExistsError``: re-confirming
+    a new workbook appends another full-snapshot version (patch=None), so the
+    version history still shows every confirmed generation.
+    """
+    validate_app_key(app_key)
+    current = get_current(db, app_key, raise_if_missing=False)
+    version = 1 if current is None else current.version + 1
+
+    record = ModelVersionRecord(
+        app_key=app_key,
+        version=version,
+        snapshot=model.model_dump(mode="json"),
+        patch=None,
+        operator=operator,
+        source_request=source_request,
+        validation_status="passed",
+    )
+    try:
+        db.add(record)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    db.refresh(record)
+    return record
+
+
 @overload
 def get_current(db: Session, app_key: str) -> ModelVersionRecord: ...
 
@@ -185,5 +222,6 @@ __all__ = [
     "import_model",
     "list_versions",
     "snapshot_to_model",
+    "upsert_model",
     "validate_app_key",
 ]

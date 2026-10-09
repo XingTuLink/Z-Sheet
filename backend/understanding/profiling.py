@@ -9,6 +9,7 @@ fixed uniform stride rather than a random sample.
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Callable
 
 from backend.ingestion.schemas import Cell, ParsedSheet, ParsedWorkbook
 
@@ -21,6 +22,20 @@ from .schemas import (
     SheetProfile,
     ValueCount,
 )
+
+# Pipeline stage keys emitted through the optional progress callback.
+# "sheets" is emitted by the API route right after parsing; the understanding
+# stages below are emitted by add_profiles as real work completes. Every key
+# maps to a user-visible line in the Parsing Progress UI (Day 12).
+STAGE_SHEETS = "sheets"
+STAGE_FIELDS = "fields"
+STAGE_ENTITIES = "entities"
+STAGE_RELATIONS = "relations"
+STAGE_ASSEMBLE = "assemble"
+
+# (stage_key, count) -> None. The "assemble" stage carries count=0 and works
+# as an "in progress" marker; the final result delivery marks it complete.
+StageCallback = Callable[[str, int], None]
 
 
 def _profile_column(name: str, values: list[Cell], total: int) -> ColumnProfile:
@@ -107,9 +122,16 @@ def profile_sheet(sheet: ParsedSheet, sample_size: int = DEFAULT_SAMPLE_SIZE) ->
 
 
 def add_profiles(
-    workbook: ParsedWorkbook, sample_size: int = DEFAULT_SAMPLE_SIZE
+    workbook: ParsedWorkbook,
+    sample_size: int = DEFAULT_SAMPLE_SIZE,
+    on_stage: StageCallback | None = None,
 ) -> ProfiledParsedWorkbook:
-    """Run the full understanding pipeline and assemble a Business Model."""
+    """Run the full understanding pipeline and assemble a Business Model.
+
+    When ``on_stage`` is given it receives real progress events
+    (fields/entities/relations/assemble with the count produced at that
+    stage), backing the Parsing Progress UI instead of a fake spinner.
+    """
     from backend.domain.serialization import model_to_dict, model_to_yaml
 
     from .entity_inference import infer_entity
@@ -117,6 +139,10 @@ def add_profiles(
     from .model_assembly import assemble_model, build_entity_plans
     from .role_inference import annotate_roles
     from .type_inference import infer_sheet
+
+    def _emit(key: str, count: int) -> None:
+        if on_stage is not None:
+            on_stage(key, count)
 
     enriched: list[ProfiledParsedSheet] = []
     for sheet in workbook.sheets:
@@ -134,6 +160,10 @@ def add_profiles(
             )
         )
 
+    # Field recognition finished: one entry per column of a non-empty sheet.
+    field_count = sum(len(sheet.inferred_fields) for sheet in enriched)
+    _emit(STAGE_FIELDS, field_count)
+
     result = ProfiledParsedWorkbook(
         file_name=workbook.file_name,
         file_type=workbook.file_type,
@@ -143,7 +173,10 @@ def add_profiles(
     # Workbook-level stage: entity plans -> links -> validated Business Model.
     plans, notes = build_entity_plans(result)
     result.assembly_notes = notes
+    _emit(STAGE_ENTITIES, len(plans))
     result.inferred_links = infer_links(result, plans)
+    _emit(STAGE_RELATIONS, len(result.inferred_links))
+    _emit(STAGE_ASSEMBLE, 0)
     model = assemble_model(result, plans, result.inferred_links)
     if model is not None:
         result.business_model = model_to_dict(model)

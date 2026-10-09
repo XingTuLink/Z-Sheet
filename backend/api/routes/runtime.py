@@ -16,6 +16,7 @@ from backend.api.schemas import RuntimeBootstrapResponse
 from backend.domain.models import BusinessModel
 from backend.runtime import seed
 from backend.storage.db import get_db
+from backend.storage.repositories import app_data_repository
 from backend.storage.repositories import model_repository as repo
 
 router = APIRouter(prefix="/api/v1/runtime", tags=["runtime"])
@@ -38,9 +39,12 @@ def bootstrap(app_key: str, db: Session = Depends(get_db)) -> Any:
             record = seed.ensure_demo_model(db)
 
         model = BusinessModel.model_validate(record.snapshot)
-        # Only the demo app ships seed rows; imported apps get an empty data
-        # set until parser-driven persistence is implemented.
-        records = seed.load_demo_records(model) if app_key == seed.DEMO_APP_KEY else {}
+        if app_key == seed.DEMO_APP_KEY:
+            # The bundled demo app always serves its checked-in seed rows.
+            records = seed.load_demo_records(model)
+        else:
+            # Day 15: confirmed uploads serve the user's own workbook rows.
+            records = app_data_repository.get_records(db, app_key) or {}
     except ValueError as exc:  # malformed app_key or invalid seed file
         return JSONResponse(status_code=422, content={"detail": str(exc)})
 

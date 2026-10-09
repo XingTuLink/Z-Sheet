@@ -45,3 +45,14 @@ class RuntimeBootstrapResponse(BaseModel):
     version: int
     model: dict[str, Any]
     records: dict[str, list[dict[str, Any]]]
+
+
+class ConfirmResponse(BaseModel):
+    """Day 15 Confirm result: the generated app key and what was persisted."""
+
+    app_key: str
+    version: int
+    app_name: str
+    links_accepted: list[str]
+    links_rejected: list[str]
+    record_counts: dict[str, int]
