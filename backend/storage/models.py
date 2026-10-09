@@ -58,3 +58,23 @@ class AppDataRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )
+
+
+class UnderstandingSessionRecord(Base):
+    """Server-side understanding result keyed by uploaded file hash (Day 22).
+
+    Parse stores the (possibly LLM-produced) ProfiledParsedWorkbook here;
+    Confirm reads it back instead of re-inferring. The client therefore cannot
+    influence the confirmed model — it only submits accept/reject decisions —
+    and a second, non-deterministic LLM call cannot disagree with what the
+    user reviewed.
+    """
+
+    __tablename__ = "understanding_sessions"
+
+    content_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    engine: Mapped[str] = mapped_column(String(16), nullable=False, default="rules")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )

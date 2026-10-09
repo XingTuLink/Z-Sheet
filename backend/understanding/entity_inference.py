@@ -198,7 +198,7 @@ def infer_entity(
 
     return InferredEntity(
         source_sheet=sheet.name,
-        key=kind,  # type: ignore[arg-type]
+        key=kind,
         name=_display_name(sheet.name, kind),
         key_field=key_field,
         confidence=confidence,

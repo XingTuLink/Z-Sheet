@@ -8,6 +8,11 @@ services:
     image: zsheet-backend:dev
     ports:
       - "8000:8000"
+    # Local, gitignored configuration (ZSHEET_LLM_API_KEY / base_url / model;
+    # see .env.example). Optional: without it the app runs rules-only.
+    env_file:
+      - path: .env
+        required: false
     environment:
       ZSHEET_DATA_DIR: /app/data
     volumes:

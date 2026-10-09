@@ -18,6 +18,9 @@ from alembic import command
 from alembic.config import Config
 
 os.environ.setdefault("ZSHEET_DATA_DIR", tempfile.mkdtemp(prefix="zsheet-test-"))
+# Tests stay offline and deterministic: the understanding pipeline only calls
+# an LLM when a test injects a fake ChatClient explicitly.
+os.environ.setdefault("ZSHEET_LLM_API_KEY", "")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 

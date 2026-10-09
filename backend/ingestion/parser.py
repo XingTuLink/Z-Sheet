@@ -14,6 +14,7 @@ from __future__ import annotations
 import csv
 import datetime as dt
 import io
+import re
 import zipfile
 from pathlib import Path
 from typing import Literal
@@ -160,8 +161,17 @@ def _parse_csv(file_name: str, content: bytes) -> ParsedSheet:
 # ---------- Shared sheet assembly ----------
 
 
+# A row is blank when it carries no "content character": no letter, digit or
+# CJK ideograph. Rows made only of ".", "-", "/", spaces or punctuation are
+# template artifacts (a stray "." in the remark column otherwise doubles the
+# row count and destroys uniqueness statistics on small sheets).
+_CONTENT_CHAR_RE = re.compile(r"[0-9A-Za-z\u4e00-\u9fff]")
+
+
 def _is_blank(row: list[Cell]) -> bool:
-    return all(cell is None for cell in row)
+    return not any(
+        cell is not None and _CONTENT_CHAR_RE.search(cell) for cell in row
+    )
 
 
 def _build_sheet(name: str, rows: list[list[Cell]]) -> ParsedSheet:

@@ -23,7 +23,11 @@ InferredFieldType = Literal["string", "number", "money", "date", "enum", "phone"
 InferredFieldRole = Literal[
     "identifier", "dimension", "measure", "time", "enum", "text"
 ]
-InferredEntityKind = Literal["customer", "order", "product", "unknown"]
+# Rule inference only emits customer/order/product/unknown; the LLM layer may
+# propose arbitrary semantic keys (reviewer, asset, project…), so the wire
+# type is a plain snake_case string. Constants below name the rule outputs.
+InferredEntityKind = str
+RULE_ENTITY_KINDS = ("customer", "order", "product", "unknown")
 
 
 class ValueCount(BaseModel):
@@ -135,3 +139,10 @@ class ProfiledParsedWorkbook(BaseModel):
     business_model_yaml: str | None = None
     # Human-readable reasons sheets/links were dropped during assembly.
     assembly_notes: list[str] = Field(default_factory=list)
+    # Day 21: which engine produced the understanding ("llm" or the
+    # deterministic "rules" fallback) plus human-readable LLM notes.
+    understanding_engine: Literal["llm", "rules"] = "rules"
+    understanding_notes: list[str] = Field(default_factory=list)
+    # Internal staging of LLM link proposals between entity mapping and the
+    # post-plan field-key resolution; not part of the API contract.
+    llm_link_specs: list[dict[str, object]] = Field(default_factory=list, exclude=True)

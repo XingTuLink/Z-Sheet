@@ -72,6 +72,10 @@ export interface UnderstandingResult {
   file_type: string
   sheets: UnderstandingSheet[]
   assembly_notes: string[]
+  // Day 21: which engine produced the entities/fields — the cloud LLM, or the
+  // deterministic rules fallback (LLM unavailable / call failed).
+  understanding_engine: 'llm' | 'rules'
+  understanding_notes: string[]
   inferred_links: InferredLink[]
   business_model: {
     app: { name: string }
@@ -189,9 +193,10 @@ export interface ConfirmResponse {
 }
 
 /**
- * Day 15: submit the reviewed workbook to the Confirm endpoint. The server
- * re-runs its deterministic pipeline and applies the review decisions; the
- * file must be sent again because uploads are never persisted server-side.
+ * Day 15/22: submit the reviewed workbook to the Confirm endpoint. The server
+ * reuses the understanding result cached at parse time (keyed by file hash) —
+ * never client-supplied structure — and applies the review decisions; the
+ * file must be sent again because uploads themselves are never stored.
  *
  * Resolves to the generated app descriptor, or throws with the server's
  * Chinese detail message (plus `unresolved` items when the queue is not

@@ -18,6 +18,7 @@ dist/
 # 环境变量与本地数据
 .env
 .env.*
+!.env.example
 *.sqlite
 *.sqlite3
 *.db

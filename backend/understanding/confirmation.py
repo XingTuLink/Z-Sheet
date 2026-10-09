@@ -2,8 +2,9 @@
 
 The SSE parse endpoint is stateless; Confirm is the first write. It:
 
-1. re-runs the deterministic understanding pipeline on the uploaded file
-   (never trusts client-supplied inference);
+1. reuses the understanding result cached server-side at parse time (keyed by
+   file hash) and only re-runs the pipeline on a cache miss — it never trusts
+   client-supplied inference;
 2. applies the human's link decisions (accept/reject + on-field overrides)
    and re-assembles the Business Model, so views/metrics are rebuilt around
    the corrected links and full pydantic semantics run again;
@@ -28,7 +29,11 @@ from backend.domain.models import BusinessField, BusinessModel, FieldType
 from backend.ingestion.parser import ParseError, parse_workbook
 from backend.ingestion.schemas import Cell
 from backend.runtime.seed import validate_records
-from backend.storage.repositories import app_data_repository, model_repository
+from backend.storage.repositories import (
+    app_data_repository,
+    model_repository,
+    understanding_repository,
+)
 from backend.understanding.model_assembly import EntityPlan, assemble_model, build_entity_plans
 from backend.understanding.profiling import add_profiles
 from backend.understanding.schemas import InferredLink, ProfiledParsedWorkbook
@@ -227,9 +232,17 @@ def confirm_workbook(
     except ParseError as exc:
         raise ConfirmError(str(exc)) from exc
 
-    # Deterministic re-inference: the client never sends model/rows, only
-    # decisions, so it cannot smuggle unvalidated structure into the app.
-    result: ProfiledParsedWorkbook = add_profiles(workbook)
+    # Anti-forgery core: consume the exact understanding result the user
+    # reviewed (stored server-side by file hash). The client never sends
+    # model/rows, only decisions, so it cannot smuggle structure into the app,
+    # and a second non-deterministic LLM call cannot disagree with the review.
+    # Cache miss (e.g. server restarted between parse and confirm) falls back
+    # to re-running the pipeline; with the rules engine this is identical.
+    result: ProfiledParsedWorkbook | None = understanding_repository.load_understanding(
+        db, understanding_repository.content_hash(content)
+    )
+    if result is None:
+        result = add_profiles(workbook)
     plans, _notes = build_entity_plans(result)
     if not plans:
         raise ConfirmError("文件中没有可生成系统的业务实体（缺少可识别的工作表或标识字段）")

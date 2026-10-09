@@ -564,8 +564,9 @@ export function UnderstandingPage() {
     setConfirming(true)
     setConfirmError('')
     try {
-      // The server re-runs the pipeline on this same file and applies the
-      // review decisions below; nothing inferred client-side is trusted.
+      // The server reuses the understanding result cached at parse time for
+      // this exact file and only applies the review decisions below; nothing
+      // inferred client-side is trusted.
       await confirmWorkbook(uploadedFile, review)
       navigate('/app')
     } catch (error) {
@@ -588,6 +589,18 @@ export function UnderstandingPage() {
             <p className="view-sub">{result.file_name}</p>
           </div>
           <div className="understanding-stats">
+            <span
+              className={
+                result.understanding_engine === 'llm' ? 'stat-done' : 'stat-pending'
+              }
+              title={
+                result.understanding_engine === 'llm'
+                  ? '由大模型理解表格结构'
+                  : '大模型不可用或调用失败，已使用规则推断兜底'
+              }
+            >
+              {result.understanding_engine === 'llm' ? 'AI 理解' : '规则兜底'}
+            </span>
             <span>{entities.length} 个实体</span>
             <span>{result.inferred_links.length} 个关联</span>
             <span className={pendingCount === 0 ? 'stat-done' : 'stat-pending'}>
@@ -595,6 +608,24 @@ export function UnderstandingPage() {
             </span>
           </div>
         </header>
+
+        {result.understanding_notes.length > 0 && (
+          <section className="card understanding-block">
+            <h2 className="block-title">
+              理解说明
+              <span className="muted block-count">
+                {result.understanding_engine === 'llm' ? 'AI 给出的判断依据' : '兜底说明'}
+              </span>
+            </h2>
+            <ul className="queue-list">
+              {result.understanding_notes.map((note) => (
+                <li key={note} className="queue-reason">
+                  {note}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
 
         <ReviewQueue
           result={result}
