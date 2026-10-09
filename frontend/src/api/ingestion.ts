@@ -172,6 +172,89 @@ export function saveReviewState(state: ReviewState): void {
 }
 
 /**
+ * Standard workbook template offered when the pipeline cannot recognize any
+ * business entity. A plain GET (anchor download) — the backend streams a
+ * pre-filled .xlsx that itself passes the full pipeline.
+ */
+export const TEMPLATE_URL = '/api/v1/ingestion/template'
+
+/** Day 15 Confirm result (mirrors backend ConfirmResponse). */
+export interface ConfirmResponse {
+  app_key: string
+  version: number
+  app_name: string
+  links_accepted: string[]
+  links_rejected: string[]
+  record_counts: Record<string, number>
+}
+
+/**
+ * Day 15: submit the reviewed workbook to the Confirm endpoint. The server
+ * re-runs its deterministic pipeline and applies the review decisions; the
+ * file must be sent again because uploads are never persisted server-side.
+ *
+ * Resolves to the generated app descriptor, or throws with the server's
+ * Chinese detail message (plus `unresolved` items when the queue is not
+ * clear).
+ */
+export async function confirmWorkbook(
+  file: File,
+  review: ReviewState,
+): Promise<ConfirmResponse> {
+  const decisions = {
+    acknowledged: Object.entries(review.acknowledged)
+      .filter(([, acknowledged]) => Boolean(acknowledged))
+      .map(([id]) => id),
+    links: Object.fromEntries(
+      Object.entries(review.links)
+        .filter(([, value]) => value.decision !== undefined)
+        .map(([key, value]) => [
+          key,
+          { decision: value.decision, on_from: value.on_from, on_to: value.on_to },
+        ]),
+    ),
+  }
+
+  const form = new FormData()
+  form.append('file', file)
+  form.append('decisions', JSON.stringify(decisions))
+
+  const response = await fetch('/api/v1/ingestion/confirm', {
+    method: 'POST',
+    body: form,
+  })
+
+  let payload: unknown = null
+  try {
+    payload = await response.json()
+  } catch {
+    payload = null
+  }
+
+  if (!response.ok) {
+    const detail =
+      payload &&
+      typeof payload === 'object' &&
+      'detail' in payload &&
+      typeof (payload as { detail?: unknown }).detail === 'string'
+        ? (payload as { detail: string }).detail
+        : `生成失败（HTTP ${response.status}），请稍后重试。`
+    const error = new Error(detail) as Error & { unresolved?: string[] }
+    if (
+      payload &&
+      typeof payload === 'object' &&
+      'unresolved' in payload &&
+      Array.isArray((payload as { unresolved?: unknown }).unresolved)
+    ) {
+      error.unresolved = (payload as { unresolved: string[] }).unresolved
+    }
+    throw error
+  }
+
+  return payload as ConfirmResponse
+}
+
+/**
  * POST the file to the SSE parse endpoint and invoke `onStage` whenever a
  * real pipeline stage completes. Resolves with the full understanding
  * result when the final `result` frame arrives.

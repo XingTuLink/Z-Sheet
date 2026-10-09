@@ -1,10 +1,12 @@
 import { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 
 import {
+  confirmWorkbook,
   loadReviewState,
   loadUnderstandingResult,
   saveReviewState,
+  TEMPLATE_URL,
   type FieldRole,
   type FieldType,
   type InferredLink,
@@ -15,6 +17,7 @@ import {
   type UnderstandingResult,
   type UnderstandingSheet,
 } from '../api/ingestion'
+import { getLastUploadedFile } from '../api/sessionStore'
 
 const TYPE_LABELS: Record<FieldType, string> = {
   string: '文本',
@@ -449,8 +452,14 @@ function DroppedSheetsSection({
 }
 
 export function UnderstandingPage() {
+  const navigate = useNavigate()
   const result = useMemo(() => loadUnderstandingResult(), [])
   const [review, setReview] = useState<ReviewState>(() => loadReviewState())
+  const [confirming, setConfirming] = useState(false)
+  const [confirmError, setConfirmError] = useState('')
+  // Non-reactive on purpose: the File is module memory set right after
+  // upload; a refresh clears it and the bar tells the user to re-upload.
+  const uploadedFile = getLastUploadedFile()
 
   if (!result || !result.business_model) {
     return (
@@ -458,11 +467,16 @@ export function UnderstandingPage() {
         <div className="card gate-card">
           <h1 className="gate-brand">Z-Sheet</h1>
           <p>还没有可浏览的理解结果。</p>
-          <p className="muted">请先上传一个 Excel 或 CSV 文件。</p>
-          <p style={{ marginTop: '20px' }}>
+          <p className="muted">
+            请先上传一个 Excel 或 CSV 文件；如果表格未能识别出业务实体，可下载标准模板参照整理。
+          </p>
+          <p style={{ marginTop: '20px', display: 'flex', gap: '12px', justifyContent: 'center' }}>
             <Link to="/" className="btn btn-primary">
               去上传表格
             </Link>
+            <a href={TEMPLATE_URL} download className="btn btn-secondary">
+              下载标准模板
+            </a>
           </p>
         </div>
       </main>
@@ -545,6 +559,23 @@ export function UnderstandingPage() {
     })
   }
 
+  const onConfirm = async () => {
+    if (!uploadedFile || pendingCount > 0 || confirming) return
+    setConfirming(true)
+    setConfirmError('')
+    try {
+      // The server re-runs the pipeline on this same file and applies the
+      // review decisions below; nothing inferred client-side is trusted.
+      await confirmWorkbook(uploadedFile, review)
+      navigate('/app')
+    } catch (error) {
+      setConfirmError(error instanceof Error ? error.message : '生成失败，请重试。')
+      setConfirming(false)
+    }
+  }
+
+  const confirmReady = pendingCount === 0 && Boolean(uploadedFile) && !confirming
+
   return (
     <main className="understanding-page">
       <div className="understanding-inner">
@@ -593,9 +624,45 @@ export function UnderstandingPage() {
         <RelationSection result={result} review={review} />
         <DroppedSheetsSection result={result} assembledSheets={assembledSheets} />
 
-        <p className="muted review-footnote">
-          审查结果暂存在当前会话中；「确认并生成系统」将在下一阶段开放，届时接受/拒绝/字段修正会随模型一起落库。
-        </p>
+        <section className="card confirm-bar" id="confirm">
+          <div className="confirm-bar-main">
+            <h2 className="confirm-title">确认并生成系统</h2>
+            <p className="muted">
+              接受、拒绝与字段修正会随模型一起落库，随后用这份表格里的数据直接生成可浏览的列表、详情与表单。
+              {pendingCount > 0 &&
+                ' 待确认队列清零后才能生成，避免不确定的推断直接进入系统。'}
+            </p>
+            {!uploadedFile && (
+              <p className="confirm-warning">
+                当前会话已丢失上传的文件（页面可能被刷新过）。请
+                <Link to="/">返回重新上传</Link>
+                ，新上传会重置本页审查记录。
+              </p>
+            )}
+            {confirmError && (
+              <div className="notice error-notice confirm-error">
+                <p>{confirmError}</p>
+              </div>
+            )}
+          </div>
+          <div className="confirm-bar-actions">
+            <span className={`confirm-state${pendingCount === 0 ? ' is-ready' : ''}`}>
+              {pendingCount === 0 ? '审查已完成' : `${pendingCount} 项待确认`}
+            </span>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={!confirmReady}
+              onClick={() => void onConfirm()}
+            >
+              {confirming
+                ? '正在生成…'
+                : pendingCount > 0
+                  ? `还有 ${pendingCount} 项待确认`
+                  : '确认并生成系统'}
+            </button>
+          </div>
+        </section>
       </div>
     </main>
   )

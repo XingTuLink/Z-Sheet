@@ -4,10 +4,12 @@ import { Link, useNavigate } from 'react-router-dom'
 import {
   parseWorkbookWithProgress,
   saveUnderstandingResult,
+  TEMPLATE_URL,
   type StageEvent,
   type StageKey,
   type UnderstandingResult,
 } from '../api/ingestion'
+import { setLastUploadedFile } from '../api/sessionStore'
 
 type Phase = 'idle' | 'working' | 'done' | 'error'
 type StageState = 'pending' | 'active' | 'done'
@@ -134,6 +136,8 @@ export function UploadPage() {
       const payload = await parseWorkbookWithProgress(file, onStage)
       patchStage('assemble', 'done')
       saveUnderstandingResult(payload)
+      // Day 15: Confirm re-sends this same file; keep it until the tab closes.
+      setLastUploadedFile(file)
       setResult(payload)
       setPhase('done')
     } catch (error) {
@@ -198,7 +202,7 @@ export function UploadPage() {
               文件仅在当前环境解析，不上传任何业务数据到云端。
             </p>
             <p className="upload-demo">
-              没有现成文件？<Link to="/app">先看看演示系统</Link>
+              没有现成文件？<Link to="/app/demo">先看看演示系统</Link>
             </p>
           </>
         )}
@@ -229,7 +233,56 @@ export function UploadPage() {
           </>
         )}
 
-        {phase === 'done' && result && (
+        {phase === 'done' && result && !result.business_model && (
+          <>
+            <p className="upload-tagline">这份表格没能生成系统</p>
+            <div className="notice error-notice">
+              <p>文件可以正常打开和解析，但没有识别出客户、商品、订单类的业务实体。</p>
+            </div>
+            {result.assembly_notes.length > 0 && (
+              <div className="notice result-notes">
+                <p className="result-notes-title">具体原因：</p>
+                <ul>
+                  {result.assembly_notes.map((note) => (
+                    <li key={note}>{note}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <p className="upload-note">
+              Z-Sheet 目前识别明细表：每张工作表一行表头、一列业务唯一标识（如客户名称、订单编号），
+              数据从第二行起每行一条记录；标题行、合并单元格、合计行以及报价单这类功能清单无法构成系统主体。
+            </p>
+            <div className="upload-actions">
+              <a
+                href={TEMPLATE_URL}
+                download
+                className="btn btn-primary"
+              >
+                下载标准模板
+              </a>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => inputRef.current?.click()}
+              >
+                重新选择文件
+              </button>
+            </div>
+            <p className="upload-demo">
+              模板内含可直接上传体验的示例数据，正式使用时替换成你的真实数据（保留表头）即可。
+            </p>
+            <input
+              ref={inputRef}
+              type="file"
+              accept={ACCEPT}
+              className="upload-input"
+              onChange={onInputChange}
+            />
+          </>
+        )}
+
+        {phase === 'done' && result && result.business_model && (
           <>
             <p className="upload-tagline">分析完成</p>
             <div className="result-head">
@@ -288,7 +341,7 @@ export function UploadPage() {
               </button>
             </div>
             <p className="upload-demo">
-              想先看渲染效果？<Link to="/app">查看内置演示系统</Link>
+              想先看渲染效果？<Link to="/app/demo">查看内置演示系统</Link>
             </p>
           </>
         )}

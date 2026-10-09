@@ -1,14 +1,23 @@
-import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom'
+import {
+  BrowserRouter,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useParams,
+} from 'react-router-dom'
 
 import { UnderstandingPage } from './pages/UnderstandingPage'
 import { UploadPage } from './pages/UploadPage'
 import { AppLayout } from './renderer/AppLayout'
+import { resolveAppRoute } from './renderer/appRoute'
 import { ViewResolver } from './renderer/ViewResolver'
 import { findViewByKey } from './renderer/resolve'
 import { useRuntime } from './renderer/useRuntime'
 
 function IndexRoute() {
   const { bootstrap } = useRuntime()
+  const { basePath } = resolveAppRoute(useLocation().pathname)
   const first = bootstrap.model.navigation[0]
   if (!first) {
     return (
@@ -20,7 +29,7 @@ function IndexRoute() {
       </section>
     )
   }
-  return <Navigate to={`/app/views/${first.view}`} replace />
+  return <Navigate to={`${basePath}/views/${first.view}`} replace />
 }
 
 function ViewRoute() {
@@ -49,8 +58,13 @@ export default function App() {
         <Route path="/" element={<UploadPage />} />
         {/* Day 13: structured browse of the understanding result. */}
         <Route path="/understanding" element={<UnderstandingPage />} />
-        {/* Bundled demo runtime lives under /app. */}
+        {/* Day 15: /app is the user's confirmed workspace; /app/demo keeps
+            the bundled demo runtime independently browsable. */}
         <Route path="/app" element={<AppLayout />}>
+          <Route index element={<IndexRoute />} />
+          <Route path="views/:viewKey" element={<ViewRoute />} />
+        </Route>
+        <Route path="/app/demo" element={<AppLayout />}>
           <Route index element={<IndexRoute />} />
           <Route path="views/:viewKey" element={<ViewRoute />} />
         </Route>

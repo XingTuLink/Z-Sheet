@@ -1123,8 +1123,65 @@ a:hover {
   display: inline-flex;
 }
 
-.review-footnote {
-  margin: 8px 0 0;
-  font-size: 12px;
-  text-align: center;
+/* ---------- Day 15 confirm action bar ---------- */
+
+.topbar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.confirm-bar {
+  position: sticky;
+  bottom: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-top: 8px;
+  padding: 20px 24px;
+  border-color: var(--color-border-strong);
+  box-shadow: 0 4px 16px rgba(31, 35, 41, 0.08);
+}
+
+.confirm-bar-main {
+  min-width: 0;
+}
+
+.confirm-title {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+
+.confirm-bar-actions {
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.confirm-state {
+  font-size: 13px;
+  color: var(--color-muted);
+  white-space: nowrap;
+}
+
+.confirm-state.is-ready {
+  color: #1a7f37;
+}
+
+.confirm-warning {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: #b26a00;
+}
+
+.confirm-warning a {
+  margin: 0 4px;
+}
+
+.confirm-error {
+  margin-bottom: 0;
 }

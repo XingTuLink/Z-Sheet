@@ -41,3 +41,20 @@ class ModelVersionRecord(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )
+
+
+class AppDataRecord(Base):
+    """Confirmed business rows for one app (Day 15 Confirm 全链路).
+
+    A single JSON document per app maps entity_key -> list of rows. Day 18
+    will introduce per-row CRUD storage; until then the whole document is
+    replaced whenever the user re-confirms an uploaded workbook.
+    """
+
+    __tablename__ = "app_data"
+
+    app_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    records: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
