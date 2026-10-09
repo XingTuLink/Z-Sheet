@@ -12,14 +12,14 @@ persistence when the data runtime lands.
 
 from __future__ import annotations
 
-from datetime import date
 from pathlib import Path
 from typing import Any
 
 import yaml
 from sqlalchemy.orm import Session
 
-from backend.domain.models import BusinessField, BusinessModel, Entity, FieldType
+from backend.domain.models import BusinessModel, Entity
+from backend.runtime.value_validation import check_field_value
 from backend.storage.models import ModelVersionRecord
 from backend.storage.repositories import model_repository as repo
 
@@ -43,31 +43,6 @@ def ensure_demo_model(db: Session) -> ModelVersionRecord:
     )
 
 
-def _check_value(field: BusinessField, value: Any, where: str) -> None:
-    t = field.type
-    if t in (FieldType.STRING, FieldType.PHONE):
-        if not isinstance(value, str):
-            raise ValueError(f"{where}: field {field.key!r} expects a string")
-    elif t is FieldType.DATE:
-        if not isinstance(value, str):
-            raise ValueError(f"{where}: field {field.key!r} expects YYYY-MM-DD string")
-        try:
-            date.fromisoformat(value)
-        except ValueError as exc:
-            raise ValueError(
-                f"{where}: field {field.key!r} has invalid ISO date {value!r}"
-            ) from exc
-    elif t is FieldType.ENUM:
-        if not isinstance(value, str) or value not in (field.values or []):
-            allowed = ", ".join(field.values or [])
-            raise ValueError(
-                f"{where}: field {field.key!r} value {value!r} is not one of: {allowed}"
-            )
-    else:  # number / money: bool is a subclass of int and must be rejected.
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError(f"{where}: field {field.key!r} expects a number")
-
-
 def _validate_entity_rows(
     entity: Entity, rows: Any
 ) -> list[dict[str, Any]]:
@@ -89,7 +64,7 @@ def _validate_entity_rows(
                     f"{where}: unknown field {field_key!r} for entity {entity.key!r}"
                 )
             if value is not None:
-                _check_value(field, value, where)
+                check_field_value(field, value, where)
         clean.append(row)
     return clean
 

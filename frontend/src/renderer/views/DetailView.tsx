@@ -1,13 +1,15 @@
-import { Link, useLocation, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { resolveAppRoute } from '../appRoute'
 import { formatCell } from '../format'
 import { findViewForEntity, getEntity } from '../resolve'
 import { useRuntime } from '../useRuntime'
 import type { DetailView as DetailViewModel } from '../types'
+import { RelatedList } from './RelatedList'
 
 export function DetailView({ view }: { view: DetailViewModel }) {
-  const { bootstrap, records } = useRuntime()
+  const { bootstrap, records, deleteRecord } = useRuntime()
+  const navigate = useNavigate()
   const model = bootstrap.model
   const [searchParams] = useSearchParams()
   const { basePath } = resolveAppRoute(useLocation().pathname)
@@ -30,6 +32,20 @@ export function DetailView({ view }: { view: DetailViewModel }) {
     (item) => String(item[entity.key_field] ?? '') === id,
   )
   const listView = findViewForEntity(model, view.entity, 'list')
+  const formView = findViewForEntity(model, view.entity, 'form')
+  const listTarget = listView ? `${basePath}/views/${listView.key}` : basePath
+
+  async function handleDelete() {
+    if (!entity || !row) return
+    const confirmed = window.confirm(`确定删除这条${entity.name}记录吗？此操作会立即保存。`)
+    if (!confirmed) return
+    try {
+      await deleteRecord(entity.key, String(row[entity.key_field] ?? ''))
+      navigate(listTarget)
+    } catch {
+      window.alert('删除失败，请稍后重试')
+    }
+  }
 
   return (
     <section className="view">
@@ -43,6 +59,19 @@ export function DetailView({ view }: { view: DetailViewModel }) {
           <h1>{view.title}</h1>
           {row && <p className="view-sub">{String(row[entity.key_field])}</p>}
         </div>
+        {row && formView && (
+          <div className="detail-actions">
+            <Link
+              className="btn btn-secondary"
+              to={`${basePath}/views/${formView.key}?id=${encodeURIComponent(id)}`}
+            >
+              编辑
+            </Link>
+            <button type="button" className="btn btn-danger" onClick={handleDelete}>
+              删除
+            </button>
+          </div>
+        )}
       </header>
 
       {!row ? (
@@ -80,10 +109,12 @@ export function DetailView({ view }: { view: DetailViewModel }) {
               </dl>
             </div>
           ) : (
-            <div className="card placeholder-card" key={`related-${index}`}>
-              <h2>{block.title ?? '关联数据'}</h2>
-              <p className="muted">关联列表将在后续版本提供。</p>
-            </div>
+            <RelatedList
+              key={`related-${index}`}
+              block={block}
+              parentEntity={entity}
+              parentRow={row}
+            />
           ),
         )
       )}

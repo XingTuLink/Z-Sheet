@@ -4,9 +4,13 @@ import type { Bootstrap, RecordRow } from './types'
 
 export interface RuntimeContextValue {
   bootstrap: Bootstrap
-  /** Local, non-persisted record state. Persistence lands with the data runtime. */
   records: Record<string, RecordRow[]>
-  addRecord: (entityKey: string, row: RecordRow) => void
+  saveRecord: (
+    entityKey: string,
+    row: RecordRow,
+    mode: 'create' | 'update',
+  ) => Promise<void>
+  deleteRecord: (entityKey: string, key: string) => Promise<void>
 }
 
 export const RuntimeContext = createContext<RuntimeContextValue | null>(null)

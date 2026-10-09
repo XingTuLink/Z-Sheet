@@ -357,6 +357,7 @@ export function ListView({ view }: { view: ListViewModel }) {
                     </th>
                   )
                 })}
+                {formView && <th className="row-action-head">操作</th>}
               </tr>
             </thead>
             <tbody>
@@ -388,6 +389,16 @@ export function ListView({ view }: { view: ListViewModel }) {
                         </td>
                       )
                     })}
+                    {formView && (
+                      <td className="row-action-cell">
+                        <Link
+                          className="row-link"
+                          to={`${basePath}/views/${formView.key}?id=${encodeURIComponent(rowKey)}`}
+                        >
+                          编辑
+                        </Link>
+                      </td>
+                    )}
                   </tr>
                 )
               })}

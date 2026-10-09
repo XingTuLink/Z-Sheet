@@ -56,3 +56,16 @@ class ConfirmResponse(BaseModel):
     links_accepted: list[str]
     links_rejected: list[str]
     record_counts: dict[str, int]
+
+
+class RecordPayload(BaseModel):
+    """One business row submitted by the generated Form view."""
+
+    row: dict[str, Any]
+
+
+class RecordMutationResponse(BaseModel):
+    app_key: str
+    entity: str
+    key: str
+    row: dict[str, Any]

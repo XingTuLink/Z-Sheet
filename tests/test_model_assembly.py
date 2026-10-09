@@ -242,15 +242,25 @@ def test_metric_only_for_flow_money_and_views_reference_it():
     model = _yaml_model(result)
 
     metric_keys = {m.key for m in model.metrics}
-    # 单价 exists on product but is a price, not summed.
-    assert metric_keys == {"total_amount"}
-    metric = model.metrics[0]
+    # Every entity gets a count; 单价 exists on product but is never summed.
+    assert metric_keys == {
+        "customer_count",
+        "product_count",
+        "order_count",
+        "total_amount",
+    }
+    metric = next(item for item in model.metrics if item.key == "total_amount")
     assert metric.entity == "order"
     assert metric.formula.op.value == "sum" and metric.formula.field == "amount"
     assert metric.business_definition
 
     dashboard = _view(model, "home_dashboard", DashboardView)
-    assert dashboard.metrics == ["total_amount"]
+    assert dashboard.metrics == [
+        "customer_count",
+        "product_count",
+        "order_count",
+        "total_amount",
+    ]
 
     order_list = _view(model, "order_list", ListView)
     assert order_list.columns[0] == "order_no"

@@ -211,6 +211,20 @@ def _build_metrics(
     plan: EntityPlan, entity: Entity, used_metric_keys: set[str]
 ) -> list[Metric]:
     metrics: list[Metric] = []
+    count_key = f"{plan.key}_count"
+    if count_key in used_metric_keys:
+        count_key = f"{plan.key}_record_count"
+    used_metric_keys.add(count_key)
+    metrics.append(
+        Metric(
+            key=count_key,
+            name=f"{plan.name}总数",
+            entity=plan.key,
+            formula=MetricFormula(op=MetricOp.COUNT),
+            business_definition=f"{plan.name}记录的总条数（自动生成口径）",
+        )
+    )
+
     for field in entity.fields:
         if field.type is not FieldType.MONEY or field.role is not FieldRole.MEASURE:
             continue

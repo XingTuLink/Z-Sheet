@@ -95,6 +95,21 @@ export interface FormView {
   fields?: string[] | null
 }
 
+export type MetricOp = 'sum' | 'avg' | 'count' | 'min' | 'max'
+
+export interface MetricFormula {
+  op: MetricOp
+  field?: string | null
+}
+
+export interface Metric {
+  key: string
+  name: string
+  entity: string
+  formula: MetricFormula
+  business_definition: string
+}
+
 export interface DashboardView {
   kind: 'dashboard'
   key: string
@@ -115,7 +130,7 @@ export interface BusinessModel {
   app: { name: string; source?: { files: string[] } | null }
   entities: Entity[]
   links: Link[]
-  metrics: unknown[]
+  metrics: Metric[]
   views: View[]
   navigation: NavigationItem[]
 }
