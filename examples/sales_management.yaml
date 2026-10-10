@@ -107,12 +107,14 @@ metrics:
     formula:
       op: count
     business_definition: "客户记录的总条数（自动生成口径）"
+    confidence: 0.9
   - key: order_count
     name: "订单总数"
     entity: order
     formula:
       op: count
     business_definition: "订单记录的总条数（自动生成口径）"
+    confidence: 0.9
   - key: total_amount
     name: "订单总额"
     entity: order
@@ -120,6 +122,7 @@ metrics:
       op: sum
       field: amount
     business_definition: "订单金额合计，不含退款"
+    confidence: 0.9
 
 views:
   - key: customer_list

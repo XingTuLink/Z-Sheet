@@ -114,12 +114,15 @@ def _review_decisions(result) -> dict[str, Any]:
     plans, _ = build_entity_plans(result)
     model = assemble_model(result, plans, result.inferred_links)
     assert model is not None
-    # The decisions payload uses bare ids; unresolved_review_items reports the
-    # same items with "entity:"/"field:" display prefixes.
+    # Entity/field decisions use bare ids; metrics keep the "metric:" namespace
+    # (their keys can collide with entity/field ids).
     prefixed = unresolved_review_items(
         plans, model, ConfirmDecisions.model_validate({})
     )
-    acknowledged = [item.split(":", 1)[1] for item in prefixed]
+    acknowledged = [
+        item if item.startswith("metric:") else item.split(":", 1)[1]
+        for item in prefixed
+    ]
     links = {
         link.key: {"decision": "accepted", "on_from": link.on_from,
                    "on_to": link.on_to}

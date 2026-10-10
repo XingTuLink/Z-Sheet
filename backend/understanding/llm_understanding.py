@@ -35,6 +35,8 @@ from .schemas import (
     InferredEntity,
     InferredField,
     InferredLink,
+    InferredMetricDefinition,
+    ProfiledParsedSheet,
     ProfiledParsedWorkbook,
 )
 
@@ -47,6 +49,8 @@ FIELD_ROLES: frozenset[str] = frozenset(
 MAX_SAMPLE_ROWS = 20
 MAX_CELL_LENGTH = 80
 MAX_ENUM_VALUES = 20
+MAX_METRIC_DEFINITION_LENGTH = 120
+METRIC_OPS: frozenset[str] = frozenset({"count", "sum"})
 # A business key must be present on (almost) every row — a blank key is the
 # hard failure at Confirm ("key field is required"). Merged-cell continuation
 # columns (e.g. 序号 left blank on sub-rows) never qualify.
@@ -86,7 +90,14 @@ SYSTEM_PROMPT = """\
 5. 忽略明显无业务意义的行：整行只有“.”“-”“/”或空格的占位行，以及
    “合计/总计/小计/共计/Total”等汇总行（它们不是业务数据，主键列为空）。
    注意：像序号、模块这类因合并单元格而留空的列存在空值，不能作为 key_field。
-6. 输出必须严格符合以下结构：
+6. metrics 为首页指标提供业务口径（business_definition）：
+   - 每个实体给一条 op="count"、field=null 的口径，说明“总数”数的是什么业务对象；
+   - 只对真正的流水金额列（如金额、费用、收入、工资合计）给 op="sum" 的口径，
+     field 填列名；单价、价格、报价等目录属性列不要给 sum；
+   - 口径用一句中文说清统计范围（例如“订单金额合计，不含退款”“含税前报价”），
+     不超过 50 字，不要复述指标名称；
+   - confidence：口径明确（能看出包含/排除什么）给 0.9；只是泛泛描述给 0.7 以下。
+7. 输出必须严格符合以下结构：
 {
   "entities": [
     {
@@ -106,6 +117,12 @@ SYSTEM_PROMPT = """\
   "links": [
     {"from_entity": "customer", "to_entity": "order",
      "on_from": "客户名称", "on_to": "客户名称", "confidence": 0.8, "reason": ""}
+  ],
+  "metrics": [
+    {"source_sheet": "订单", "op": "count", "field": null,
+     "business_definition": "全部成交订单的条数，不含已取消订单", "confidence": 0.9},
+    {"source_sheet": "订单", "op": "sum", "field": "金额",
+     "business_definition": "订单金额合计，不含退款", "confidence": 0.9}
   ]
 }"""
 
@@ -158,9 +175,23 @@ class LLMLinkSpec(BaseModel):
         return max(0.0, min(1.0, value))
 
 
+class LLMMetricSpec(BaseModel):
+    source_sheet: str
+    op: str
+    field: str | None = None
+    business_definition: str = ""
+    confidence: float = 0.7
+
+    @field_validator("confidence")
+    @classmethod
+    def _clamp(cls, value: float) -> float:
+        return max(0.0, min(1.0, value))
+
+
 class LLMUnderstanding(BaseModel):
     entities: list[LLMEntitySpec] = Field(default_factory=list)
     links: list[LLMLinkSpec] = Field(default_factory=list)
+    metrics: list[LLMMetricSpec] = Field(default_factory=list)
 
 
 def _clip(value: object) -> str | None:
@@ -431,11 +462,77 @@ def apply_llm_understanding(
         if not sheet.is_empty and sheet.name not in matched_sheets:
             notes.append(f"工作表「{sheet.name}」未被 LLM 识别为实体，保留规则引擎结果")
 
+    # Metric definitions can be validated immediately (sheet + column exist);
+    # they ride on the serialized result so Confirm re-assembly reuses them.
+    definitions, metric_notes = build_metric_definitions(
+        proposal.metrics, sheets_by_name, matched_sheets
+    )
+    result.metric_definitions = definitions
+    notes.extend(metric_notes)
+
     # Stash link specs (raw dicts; schemas must stay LLM-package agnostic) for
     # the post-plan stage where columns can be mapped to field keys.
     result.llm_link_specs = [spec.model_dump() for spec in proposal.links]
     result.understanding_engine = "llm"
     return "llm", notes
+
+
+def build_metric_definitions(
+    specs: list[LLMMetricSpec],
+    sheets_by_name: dict[str, ProfiledParsedSheet],
+    matched_sheets: set[str],
+) -> tuple[list[InferredMetricDefinition], list[str]]:
+    """Validate LLM metric definitions against the real workbook.
+
+    Only the definition text is accepted here: metric selection remains
+    deterministic, so an op the assembler never builds or a column that does
+    not exist is dropped. Duplicate (sheet, op, column) proposals keep the
+    first.
+    """
+    notes: list[str] = []
+    seen: set[tuple[str, str, str | None]] = set()
+    definitions: list[InferredMetricDefinition] = []
+    for spec in specs:
+        sheet_name = spec.source_sheet.strip()
+        sheet = sheets_by_name.get(sheet_name)
+        if sheet is None or sheet.name not in matched_sheets:
+            notes.append(
+                f"LLM 指标口径找不到已识别的工作表「{sheet_name}」，已忽略"
+            )
+            continue
+        op = spec.op.strip().lower()
+        if op not in METRIC_OPS:
+            notes.append(f"工作表「{sheet_name}」的指标算子「{spec.op}」不在 V0.1 范围，已忽略")
+            continue
+        column = spec.field.strip() if spec.field else None
+        if op == "count":
+            column = None
+        elif not column or column not in sheet.columns:
+            notes.append(
+                f"工作表「{sheet_name}」的合计指标列"
+                f"「{column or '(空)'}」不存在，已忽略该口径"
+            )
+            continue
+        definition = spec.business_definition.strip()
+        if not definition:
+            notes.append(f"工作表「{sheet_name}」的 {op} 指标缺少业务口径，已忽略")
+            continue
+        if len(definition) > MAX_METRIC_DEFINITION_LENGTH:
+            definition = definition[:MAX_METRIC_DEFINITION_LENGTH] + "…"
+        identity = (sheet.name, op, column)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        definitions.append(
+            InferredMetricDefinition(
+                source_sheet=sheet.name,
+                op=op,  # type: ignore[arg-type]
+                field=column,
+                business_definition=definition,
+                confidence=spec.confidence,
+            )
+        )
+    return definitions, notes
 
 
 def build_llm_links(

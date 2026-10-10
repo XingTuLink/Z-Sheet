@@ -107,6 +107,25 @@ class ProfiledParsedSheet(ParsedSheet):
     inferred_entity: InferredEntity | None = None
 
 
+class InferredMetricDefinition(BaseModel):
+    """AI-proposed business definition (口径) for one deterministic metric.
+
+    Metric *selection* stays deterministic (a count per entity plus sums over
+    flow-money fields); the LLM only supplies the human-facing definition and
+    a confidence, so it cannot invent metrics on unknown fields. References
+    use the sheet name and the original column name and are resolved against
+    assembled plans, exactly like link proposals. Persisted with the
+    understanding session because Confirm re-assembles the model.
+    """
+
+    source_sheet: str
+    op: Literal["count", "sum"]
+    # Original column name for sum; None for entity-wide count.
+    field: str | None = None
+    business_definition: str = Field(min_length=1)
+    confidence: float
+
+
 class InferredLink(BaseModel):
     """One-to-many link candidate between two assembled entities (Day 11).
 
@@ -143,6 +162,10 @@ class ProfiledParsedWorkbook(BaseModel):
     # deterministic "rules" fallback) plus human-readable LLM notes.
     understanding_engine: Literal["llm", "rules"] = "rules"
     understanding_notes: list[str] = Field(default_factory=list)
+    # AI-proposed business definitions (口径) for the deterministic metrics;
+    # serialized on purpose so Confirm re-assembly (which rebuilds metrics)
+    # consumes exactly the text the user reviewed.
+    metric_definitions: list[InferredMetricDefinition] = Field(default_factory=list)
     # Internal staging of LLM link proposals between entity mapping and the
     # post-plan field-key resolution; not part of the API contract.
     llm_link_specs: list[dict[str, object]] = Field(default_factory=list, exclude=True)

@@ -18,7 +18,9 @@ from backend.domain.models import (
 )
 from backend.domain.serialization import model_from_yaml
 from backend.ingestion.schemas import ParsedSheet, ParsedWorkbook
+from backend.understanding.model_assembly import assemble_model, build_entity_plans
 from backend.understanding.profiling import add_profiles
+from backend.understanding.schemas import InferredMetricDefinition
 
 client = TestClient(app)
 
@@ -253,6 +255,16 @@ def test_metric_only_for_flow_money_and_views_reference_it():
     assert metric.entity == "order"
     assert metric.formula.op.value == "sum" and metric.formula.field == "amount"
     assert metric.business_definition
+    # Rules engine: a row count is unambiguous (high confidence, no queue); a
+    # money sum assumes a business meaning, so its template definition enters
+    # the review queue.
+    for plan_key in ("customer", "product", "order"):
+        count_metric = next(m for m in model.metrics if m.key == f"{plan_key}_count")
+        assert count_metric.confidence == 0.9
+        assert count_metric.needs_review is False
+    assert metric.confidence == 0.8
+    assert metric.needs_review is True
+    assert metric.review_reason
 
     dashboard = _view(model, "home_dashboard", DashboardView)
     assert dashboard.metrics == [
@@ -276,6 +288,66 @@ def test_metric_only_for_flow_money_and_views_reference_it():
     assert [item.view for item in model.navigation] == [
         "home_dashboard", "customer_list", "product_list", "order_list",
     ]
+
+
+def test_ai_metric_definitions_replace_templates_and_gate_low_confidence():
+    result = _ledger()
+    plans, _ = build_entity_plans(result)
+    result.metric_definitions = [
+        InferredMetricDefinition(
+            source_sheet="订单",
+            op="count",
+            business_definition="成交订单总条数，不含已取消订单",
+            confidence=0.92,
+        ),
+        InferredMetricDefinition(
+            source_sheet="订单",
+            op="sum",
+            field="金额",
+            business_definition="订单金额合计，不含退款",
+            confidence=0.9,
+        ),
+        # A vague AI definition lands in the review queue instead of the card.
+        InferredMetricDefinition(
+            source_sheet="客户",
+            op="count",
+            business_definition="客户的数量",
+            confidence=0.6,
+        ),
+    ]
+    model = assemble_model(result, plans, result.inferred_links)
+    assert model is not None
+
+    order_count = next(m for m in model.metrics if m.key == "order_count")
+    assert order_count.business_definition == "成交订单总条数，不含已取消订单"
+    assert order_count.needs_review is False
+
+    total = next(m for m in model.metrics if m.key == "total_amount")
+    assert total.business_definition == "订单金额合计，不含退款"
+    assert total.needs_review is False
+    assert total.review_reason is None
+
+    customer_count = next(m for m in model.metrics if m.key == "customer_count")
+    assert customer_count.business_definition == "客户的数量"
+    assert customer_count.needs_review is True
+    assert customer_count.review_reason
+
+
+def test_metric_definition_on_unknown_column_is_ignored():
+    result = _ledger()
+    plans, _ = build_entity_plans(result)
+    result.metric_definitions = [
+        InferredMetricDefinition(
+            source_sheet="订单", op="sum", field="幽灵列",
+            business_definition="不应进入模型", confidence=0.95,
+        ),
+    ]
+    model = assemble_model(result, plans, result.inferred_links)
+    assert model is not None
+    total = next(m for m in model.metrics if m.key == "total_amount")
+    # Falls back to the deterministic template (review-gated), never the AI text.
+    assert "幽灵列" not in total.business_definition
+    assert total.needs_review is True
 
 
 def test_unknown_and_keyless_sheets_are_skipped_with_notes():

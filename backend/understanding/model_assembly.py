@@ -45,10 +45,26 @@ from backend.domain.models import (
 
 from .keywords import PRICE_NAME_KEYWORDS, has_keyword
 from .naming import unique_entity_keys, unique_field_keys
-from .schemas import InferredField, InferredLink, ProfiledParsedSheet, ProfiledParsedWorkbook
+from .schemas import (
+    CONFIDENCE_HIGH,
+    InferredField,
+    InferredLink,
+    InferredMetricDefinition,
+    ProfiledParsedSheet,
+    ProfiledParsedWorkbook,
+)
 
 MAX_LIST_COLUMNS = 6
 MAX_FILTER_FIELDS = 4
+
+# Metric *selection* is deterministic, not an inference: a row count is
+# unambiguous, so its auto-generated definition is high confidence and does
+# not block Confirm. A flow-money sum assumes a business meaning the field
+# name alone cannot prove, so without an AI definition it enters the queue.
+COUNT_METRIC_CONFIDENCE = 0.9
+RULE_SUM_METRIC_CONFIDENCE = 0.8
+RULE_SUM_METRIC_REASON = "金额合计指标由系统按字段名自动生成，统计口径需业务确认"
+AI_METRIC_REVIEW_REASON = "指标口径由 AI 根据表格内容生成，建议人工确认"
 
 # A child-side column only *behaves* as a foreign key: Excel has no FK
 # constraint, so the join field itself is never high-confidence no matter how
@@ -207,8 +223,45 @@ def _build_links(links: list[InferredLink]) -> list[Link]:
     ]
 
 
+# Per-entity lookup: (op, field_key-or-None) -> AI-proposed definition.
+MetricDefinitionMap = dict[tuple[str, str | None], InferredMetricDefinition]
+
+
+def _metric_kwargs(
+    spec: InferredMetricDefinition | None,
+    fallback_definition: str,
+    fallback_confidence: float,
+    fallback_review_reason: str | None = None,
+) -> dict[str, object]:
+    """Build Metric confidence fields around an AI definition or the fallback."""
+    if spec is None:
+        return {
+            "business_definition": fallback_definition,
+            "confidence": fallback_confidence,
+            # None lets the confidence mixin derive needs_review; the rule sum
+            # passes an explicit reason and forces review itself.
+            "needs_review": (
+                True if fallback_review_reason is not None else None
+            ),
+            "review_reason": fallback_review_reason,
+        }
+    return {
+        "business_definition": spec.business_definition,
+        "confidence": spec.confidence,
+        "needs_review": None,
+        "review_reason": (
+            AI_METRIC_REVIEW_REASON
+            if spec.confidence < CONFIDENCE_HIGH
+            else None
+        ),
+    }
+
+
 def _build_metrics(
-    plan: EntityPlan, entity: Entity, used_metric_keys: set[str]
+    plan: EntityPlan,
+    entity: Entity,
+    used_metric_keys: set[str],
+    definitions: MetricDefinitionMap,
 ) -> list[Metric]:
     metrics: list[Metric] = []
     count_key = f"{plan.key}_count"
@@ -221,7 +274,11 @@ def _build_metrics(
             name=f"{plan.name}总数",
             entity=plan.key,
             formula=MetricFormula(op=MetricOp.COUNT),
-            business_definition=f"{plan.name}记录的总条数（自动生成口径）",
+            **_metric_kwargs(  # type: ignore[arg-type]
+                definitions.get(("count", None)),
+                f"{plan.name}记录的总条数（自动生成口径）",
+                COUNT_METRIC_CONFIDENCE,
+            ),
         )
     )
 
@@ -241,8 +298,11 @@ def _build_metrics(
                 name=f"{field.name}合计",
                 entity=plan.key,
                 formula=MetricFormula(op=MetricOp.SUM, field=field.key),
-                business_definition=(
-                    f"{plan.name}「{field.name}」的合计值（自动生成口径，需业务确认）"
+                **_metric_kwargs(  # type: ignore[arg-type]
+                    definitions.get(("sum", field.key)),
+                    f"{plan.name}「{field.name}」的合计值（自动生成口径，需业务确认）",
+                    RULE_SUM_METRIC_CONFIDENCE,
+                    RULE_SUM_METRIC_REASON,
                 ),
             )
         )
@@ -271,10 +331,34 @@ def _ordered_field_keys(plan: EntityPlan, entity: Entity) -> list[str]:
     return (key_field_first + rest)[:MAX_LIST_COLUMNS]
 
 
+def _metric_definition_maps(
+    workbook: ProfiledParsedWorkbook, plans: list[EntityPlan]
+) -> dict[str, MetricDefinitionMap]:
+    """Resolve AI definitions (sheet + original column) onto plan field keys."""
+    plan_by_sheet = {plan.sheet.name.strip(): plan for plan in plans}
+    maps: dict[str, MetricDefinitionMap] = {}
+    for spec in workbook.metric_definitions:
+        plan = plan_by_sheet.get(spec.source_sheet.strip())
+        if plan is None:
+            continue
+        field_key: str | None = None
+        if spec.op == "sum":
+            field_key = plan.field_keys.get(spec.field or "")
+            if field_key is None:
+                continue
+        entity_map = maps.setdefault(plan.key, {})
+        identity = (spec.op, field_key)
+        # Duplicate proposals keep the first, mirroring LLM link handling.
+        if identity not in entity_map:
+            entity_map[identity] = spec
+    return maps
+
+
 def _build_views_and_metrics(
     plans: list[EntityPlan],
     entities: dict[str, Entity],
     links: list[Link],
+    metric_definitions: dict[str, MetricDefinitionMap],
 ) -> tuple[list[Metric], list[object], list[NavigationItem]]:
     all_metrics: list[Metric] = []
     used_metric_keys: set[str] = set()
@@ -350,7 +434,14 @@ def _build_views_and_metrics(
         )
 
         navigation.append(NavigationItem(label=plan.name, view=f"{plan.key}_list"))
-        all_metrics.extend(_build_metrics(plan, entity, used_metric_keys))
+        all_metrics.extend(
+            _build_metrics(
+                plan,
+                entity,
+                used_metric_keys,
+                metric_definitions.get(plan.key, {}),
+            )
+        )
 
     if all_metrics:
         views.append(
@@ -385,7 +476,10 @@ def assemble_model(
     ]
     entity_map = {plan.key: entity for plan, entity in zip(plans, entities, strict=True)}
     domain_links = _build_links(links)
-    metrics, views, navigation = _build_views_and_metrics(plans, entity_map, domain_links)
+    metric_definitions = _metric_definition_maps(workbook, plans)
+    metrics, views, navigation = _build_views_and_metrics(
+        plans, entity_map, domain_links, metric_definitions
+    )
 
     return BusinessModel(
         app=AppInfo(

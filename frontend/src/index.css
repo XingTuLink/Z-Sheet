@@ -997,6 +997,75 @@ a:hover {
   color: #9a6700;
 }
 
+.metric-def-card {
+  padding: 8px 20px;
+}
+
+.metric-def-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.metric-def-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--color-line);
+}
+
+.metric-def-item:last-child {
+  border-bottom: none;
+}
+
+.metric-def-item.is-review {
+  margin: 0 -8px;
+  padding: 14px 8px;
+  background: #fff8e6;
+  border-bottom: 1px solid #f0b42940;
+  border-radius: var(--radius-sm);
+}
+
+.metric-def-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.metric-def-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.metric-def-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.metric-definition {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--color-muted);
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.metric-definition-label {
+  flex: none;
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+.metric-def-actions {
+  flex: none;
+}
+
 .review-queue {
   padding: 20px 24px;
   margin-bottom: 24px;

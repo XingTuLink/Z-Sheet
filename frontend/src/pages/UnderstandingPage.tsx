@@ -14,6 +14,7 @@ import {
   type ReviewDecision,
   type ReviewState,
   type UnderstandingEntity,
+  type UnderstandingMetric,
   type UnderstandingResult,
   type UnderstandingSheet,
 } from '../api/ingestion'
@@ -73,6 +74,27 @@ function fieldAckId(entityKey: string, fieldKey: string) {
   return `${entityKey}.${fieldKey}`
 }
 
+// Metric keys live in their own namespace on the backend; keep the prefix so
+// a metric id can never collide with an entity/field id.
+function metricAckId(metricKey: string) {
+  return `metric:${metricKey}`
+}
+
+const METRIC_OP_LABELS: Record<string, string> = {
+  count: '总数',
+  sum: '合计',
+  avg: '平均',
+  min: '最小',
+  max: '最大',
+}
+
+function metricReason(metric: UnderstandingMetric): string {
+  const definition = `指标口径：${metric.business_definition}`
+  return metric.review_reason
+    ? `${metric.review_reason}　${definition}`
+    : definition
+}
+
 interface ReviewQueueProps {
   result: UnderstandingResult
   entityConfidence: Map<string, { confidence: number; needs_review: boolean }>
@@ -93,7 +115,7 @@ function ReviewQueue({
     entities.find((entity) => entity.key === key)?.name ?? key
 
   interface AckItem {
-    kind: 'entity' | 'field'
+    kind: 'entity' | 'field' | 'metric'
     id: string
     location: string
     label: string
@@ -125,6 +147,18 @@ function ReviewQueue({
           reason: field.review_reason ?? '推断证据不足，建议人工确认',
         })
       }
+    }
+  }
+  for (const metric of result.business_model?.metrics ?? []) {
+    if (metric.needs_review) {
+      ackItems.push({
+        kind: 'metric',
+        id: metricAckId(metric.key),
+        location: `${entityName(metric.entity)} · 指标`,
+        label: metric.name,
+        confidence: metric.confidence,
+        reason: metricReason(metric),
+      })
     }
   }
 
@@ -363,6 +397,91 @@ function EntityCard({
   )
 }
 
+function MetricsSection({
+  result,
+  review,
+  onAcknowledge,
+}: {
+  result: UnderstandingResult
+  review: ReviewState
+  onAcknowledge: (id: string) => void
+}) {
+  const metrics = result.business_model?.metrics ?? []
+  if (metrics.length === 0) return null
+  const entities = result.business_model?.entities ?? []
+  const entityName = (key: string) =>
+    entities.find((entity) => entity.key === key)?.name ?? key
+
+  return (
+    <section className="understanding-section">
+      <h2 className="section-title">
+        首页关键指标
+        <span className="muted block-count">{metrics.length} 个</span>
+      </h2>
+      <div className="card metric-def-card">
+        <ul className="metric-def-list">
+          {metrics.map((metric) => {
+            const ackId = metricAckId(metric.key)
+            const acked = Boolean(review.acknowledged[ackId])
+            return (
+              <li
+                key={metric.key}
+                className={`metric-def-item${metric.needs_review ? ' is-review' : ''}`}
+              >
+                <div className="metric-def-main">
+                  <div className="metric-def-head">
+                    <span className="metric-def-name">{metric.name}</span>
+                    <span className="tag tag-kind">
+                      {entityName(metric.entity)} ·{' '}
+                      {METRIC_OP_LABELS[metric.formula.op] ?? metric.formula.op}
+                    </span>
+                    <ConfidenceBadge confidence={metric.confidence} />
+                    {metric.needs_review &&
+                      (acked ? (
+                        <span className="tag tag-acked">已确认</span>
+                      ) : (
+                        <span className="tag tag-pending">口径待确认</span>
+                      ))}
+                  </div>
+                  <p className="metric-definition">
+                    <span className="metric-definition-label">业务口径</span>
+                    {metric.business_definition}
+                  </p>
+                  {metric.needs_review && metric.review_reason && (
+                    <p className="field-review-reason">{metric.review_reason}</p>
+                  )}
+                </div>
+                {metric.needs_review && (
+                  <div className="metric-def-actions">
+                    {acked ? (
+                      <button
+                        type="button"
+                        className="btn btn-mini"
+                        onClick={() => onAcknowledge(ackId)}
+                        aria-pressed="true"
+                      >
+                        撤销确认
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn btn-mini btn-primary"
+                        onClick={() => onAcknowledge(ackId)}
+                      >
+                        口径无误
+                      </button>
+                    )}
+                  </div>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      </div>
+    </section>
+  )
+}
+
 function RelationSection({ result, review }: { result: UnderstandingResult; review: ReviewState }) {
   const entities = result.business_model?.entities ?? []
   const entityName = (key: string) =>
@@ -522,6 +641,10 @@ export function UnderstandingPage() {
         ).length,
       0,
     ) +
+    (result.business_model?.metrics ?? []).filter(
+      (metric) =>
+        metric.needs_review && !review.acknowledged[metricAckId(metric.key)],
+    ).length +
     result.inferred_links.filter((link) => !review.links[link.key]?.decision).length
 
   const updateReview = (next: ReviewState) => {
@@ -651,6 +774,12 @@ export function UnderstandingPage() {
             ))}
           </div>
         </section>
+
+        <MetricsSection
+          result={result}
+          review={review}
+          onAcknowledge={acknowledge}
+        />
 
         <RelationSection result={result} review={review} />
         <DroppedSheetsSection result={result} assembledSheets={assembledSheets} />

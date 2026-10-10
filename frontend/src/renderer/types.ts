@@ -108,6 +108,11 @@ export interface Metric {
   entity: string
   formula: MetricFormula
   business_definition: string
+  // Present on models assembled after metric reviews shipped; older persisted
+  // snapshots predate these fields, so the renderer treats them as optional.
+  confidence?: number
+  needs_review?: boolean
+  review_reason?: string | null
 }
 
 export interface DashboardView {

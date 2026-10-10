@@ -7,7 +7,7 @@ results act as fallback and column-level defaults.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
 
 from backend.ai.provider import ChatClient, LLMCallError, LLMConfig
 from backend.ingestion.schemas import ParsedSheet, ParsedWorkbook
@@ -328,6 +328,59 @@ def test_duplicate_key_still_generates_but_forces_review() -> None:
     by_column = {f.column: f for f in result.sheets[0].inferred_fields}
     assert by_column["功能"].needs_review is True
     assert any("重复值" in note for note in result.understanding_notes)
+
+
+def test_llm_metric_definitions_validated_against_workbook() -> None:
+    proposal = _person_proposal()
+    proposal["metrics"] = [
+        {"source_sheet": "校对总表", "op": "count", "field": None,
+         "business_definition": "在册外审人员总人数", "confidence": 0.9},
+        {"source_sheet": "校对总表", "op": "sum", "field": "不存在的列",
+         "business_definition": "无效", "confidence": 0.9},
+        {"source_sheet": "幽灵表", "op": "count",
+         "business_definition": "无效", "confidence": 0.9},
+        {"source_sheet": "校对总表", "op": "avg",
+         "business_definition": "无效", "confidence": 0.9},
+        {"source_sheet": "校对总表", "op": "count",
+         "business_definition": "   ", "confidence": 0.9},
+    ]
+    client = ChatClient(LLM_CONFIG, transport=ProposalTransport(proposal))
+    result = add_profiles(_workbook([_person_sheet()]), llm_client=client)
+
+    definitions = result.metric_definitions
+    assert len(definitions) == 1
+    assert definitions[0].op == "count" and definitions[0].field is None
+    assert definitions[0].business_definition == "在册外审人员总人数"
+
+    # The AI definition reaches the assembled metric at high confidence.
+    assert result.business_model is not None
+    metrics = cast(list[dict[str, Any]], result.business_model["metrics"])
+    metric = next(m for m in metrics if m["key"] == "proofreader_count")
+    assert metric["business_definition"] == "在册外审人员总人数"
+    assert metric["needs_review"] is False
+
+    # Every rejected proposal is explained in the understanding notes.
+    notes = "\n".join(result.understanding_notes)
+    assert "不存在的列" in notes and "幽灵表" in notes
+    assert "avg" in notes and "业务口径" in notes
+
+
+def test_low_confidence_metric_definition_enters_review_queue() -> None:
+    proposal = _person_proposal()
+    proposal["metrics"] = [
+        {"source_sheet": "校对总表", "op": "count",
+         "business_definition": "人数", "confidence": 0.6},
+    ]
+    client = ChatClient(LLM_CONFIG, transport=ProposalTransport(proposal))
+    result = add_profiles(_workbook([_person_sheet()]), llm_client=client)
+
+    assert result.business_model is not None
+    metrics = cast(list[dict[str, Any]], result.business_model["metrics"])
+    metric = next(m for m in metrics if m["key"] == "proofreader_count")
+    assert metric["business_definition"] == "人数"
+    assert metric["confidence"] == 0.6
+    assert metric["needs_review"] is True
+    assert metric["review_reason"]
 
 
 def test_enum_without_value_set_downgrades_to_string() -> None:

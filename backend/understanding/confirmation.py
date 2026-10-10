@@ -8,9 +8,9 @@ The SSE parse endpoint is stateless; Confirm is the first write. It:
 2. applies the human's link decisions (accept/reject + on-field overrides)
    and re-assembles the Business Model, so views/metrics are rebuilt around
    the corrected links and full pydantic semantics run again;
-3. refuses while any needs_review entity/field or inferred link is still
-   unresolved (design 10.1: medium/low confidence must be acknowledged by a
-   human before it becomes a system);
+3. refuses while any needs_review entity/field/metric or inferred link is
+   still unresolved (design 10.1: medium/low confidence must be acknowledged
+   by a human before it becomes a system);
 4. persists the model as a new version of the workspace app and extracts +
    validates the workbook's own rows, which the runtime bootstrap then
    serves — the generated app runs on the user's data, not the demo seed.
@@ -64,7 +64,10 @@ class LinkDecisionPayload(BaseModel):
 
 
 class ConfirmDecisions(BaseModel):
-    # Acknowledged review items: "entity_key" / "entity_key.field_key".
+    # Acknowledged review items:
+    #   "entity_key" / "entity_key.field_key" — bare ids (frozen since Day 14);
+    #   "metric:metric_key" — namespaced, because metric keys live in their own
+    #   namespace and could otherwise collide with an entity/field id.
     acknowledged: list[str] = Field(default_factory=list)
     # link key -> human decision; every inferred link must be present.
     links: dict[str, LinkDecisionPayload] = Field(default_factory=dict)
@@ -140,6 +143,9 @@ def unresolved_review_items(
         for field in entity.fields:
             if field.needs_review and f"{entity.key}.{field.key}" not in acknowledged:
                 unresolved.append(f"field:{entity.key}.{field.key}")
+    for metric in model.metrics:
+        if metric.needs_review and f"metric:{metric.key}" not in acknowledged:
+            unresolved.append(f"metric:{metric.key}")
     return unresolved
 
 

@@ -86,7 +86,7 @@ def _parse_result() -> dict:
 
 
 def _acknowledged(result: dict) -> list[str]:
-    """Collect every needs_review entity/field id exactly like the UI."""
+    """Collect every needs_review entity/field/metric id exactly like the UI."""
     model = result["business_model"]
     sheet_by_name = {sheet["name"]: sheet for sheet in result["sheets"]}
     ids: list[str] = []
@@ -98,6 +98,9 @@ def _acknowledged(result: dict) -> list[str]:
         for field in entity["fields"]:
             if field["needs_review"]:
                 ids.append(f"{entity['key']}.{field['key']}")
+    for metric in model.get("metrics", []):
+        if metric["needs_review"]:
+            ids.append(f"metric:{metric['key']}")
     return ids
 
 

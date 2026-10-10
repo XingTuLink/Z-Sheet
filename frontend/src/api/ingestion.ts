@@ -39,6 +39,22 @@ export interface UnderstandingEntity {
   fields: UnderstandingField[]
 }
 
+export type MetricOp = 'sum' | 'avg' | 'count' | 'min' | 'max'
+
+export interface UnderstandingMetric {
+  key: string
+  name: string
+  entity: string
+  formula: { op: MetricOp; field?: string | null }
+  // Design 7.2 principle B: the business definition (口径) is a first-class
+  // field. AI-authored definitions carry a confidence and must be acknowledged
+  // at medium/low tiers before the system can be generated.
+  business_definition: string
+  confidence: number
+  needs_review: boolean
+  review_reason?: string | null
+}
+
 export interface UnderstandingField {
   key: string
   name: string
@@ -80,7 +96,7 @@ export interface UnderstandingResult {
   business_model: {
     app: { name: string }
     entities: UnderstandingEntity[]
-    metrics: unknown[]
+    metrics: UnderstandingMetric[]
   } | null
   business_model_yaml: string | null
 }
@@ -141,7 +157,9 @@ export interface LinkReview {
 }
 
 export interface ReviewState {
-  // Acknowledged entities/fields: `${entityKey}` or `${entityKey}.${fieldKey}`.
+  // Acknowledged review items:
+  //   `${entityKey}` / `${entityKey}.${fieldKey}` for entities/fields;
+  //   `metric:${metricKey}` for metrics (namespaced to avoid key collisions).
   acknowledged: Record<string, boolean>
   links: Record<string, LinkReview>
 }

@@ -41,6 +41,25 @@ def test_minimal_valid_model():
     assert model.entities[0].fields[0].needs_review is False
 
 
+def test_legacy_metric_snapshot_without_confidence_still_boots():
+    data = _minimal_model(
+        metrics=[
+            {
+                "key": "thing_count",
+                "name": "事物总数",
+                "entity": "thing",
+                "formula": {"op": "count"},
+                "business_definition": "事物记录的总条数（自动生成口径）",
+            }
+        ]
+    )
+    model = BusinessModel.model_validate(data)
+    metric = model.metrics[0]
+    assert metric.confidence == 0.9
+    assert metric.needs_review is False
+    assert metric.review_reason is None
+
+
 def test_needs_review_derived_when_omitted():
     data = _field(confidence=0.61)
     del data["needs_review"]  # genuinely omitted -> must be derived from confidence
