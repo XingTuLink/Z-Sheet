@@ -12,16 +12,19 @@ import json
 from typing import Any
 
 import openpyxl
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.ai.provider import ChatClient, LLMConfig
 from backend.api.main import app
 from backend.ingestion.parser import parse_workbook
+from backend.ingestion.schemas import ParsedSheet, ParsedWorkbook
 from backend.storage.db import SessionLocal
 from backend.storage.repositories import (
     model_repository,
     understanding_repository,
 )
+from backend.understanding import confirmation
 from backend.understanding.confirmation import (
     WORKSPACE_APP_KEY,
     ConfirmDecisions,
@@ -30,6 +33,11 @@ from backend.understanding.confirmation import (
 )
 from backend.understanding.model_assembly import assemble_model, build_entity_plans
 from backend.understanding.profiling import add_profiles
+
+
+def _workbook(sheets: list[ParsedSheet]):
+    return ParsedWorkbook(file_name="t.xlsx", file_type="xlsx", sheets=sheets)
+
 
 client = TestClient(app)
 
@@ -137,10 +145,37 @@ def test_real_external_review_row_survives_in_xlsx() -> None:
     assert sheet.rows[0][1] == "郭婉莹"
 
 
+def test_parser_drops_aggregate_total_rows() -> None:
+    workbook = parse_workbook(
+        "报价.csv",
+        "序号,功能,金额\n1,首页,150\n2,详情,100\n,,合计\n".encode(),
+    )
+    sheet = workbook.sheets[0]
+    assert sheet.data_row_count == 2
+    assert [row[1] for row in sheet.rows] == ["首页", "详情"]
+    assert any("aggregate" in warning for warning in sheet.warnings)
+
+
+def test_parser_drops_total_row_in_any_column_xlsx() -> None:
+    wb = openpyxl.Workbook()
+    sheet = wb.worksheets[0]
+    sheet.title = "报价单"
+    sheet.append(["序号", "模块", "功能", "描述", "数量", "单价"])
+    sheet.append(["1", "小程序", "首页", "展示", "1", "150"])
+    # Real-world shape: the marker sits in a non-key column, totals on right.
+    sheet.append([None, None, None, "合计", "3138", None])
+    buf = io.BytesIO()
+    wb.save(buf)
+    workbook = parse_workbook("小程序报价单.xlsx", buf.getvalue())
+    parsed_sheet = workbook.sheets[0]
+    assert parsed_sheet.data_row_count == 1
+    assert parsed_sheet.rows[0][2] == "首页"
+
+
 def test_understanding_session_round_trips_and_overwrites() -> None:
     workbook = parse_workbook("校对.xlsx", _review_xlsx())
     result = add_profiles(workbook, llm_client=None)
-    digest = understanding_repository.content_hash(_review_xlsx())
+    digest = understanding_repository.session_key(_review_xlsx())
 
     db = SessionLocal()
     try:
@@ -172,7 +207,7 @@ def test_confirm_uses_cached_llm_snapshot_without_re_inferring() -> None:
     db = SessionLocal()
     try:
         understanding_repository.save_understanding(
-            db, understanding_repository.content_hash(content), llm_result
+            db, understanding_repository.session_key(content), llm_result
         )
         # No LLM is configured in the test environment: a re-run would yield
         # the rules engine, whose entity key differs from "proofreader".
@@ -218,9 +253,49 @@ def test_parse_endpoint_persists_session_for_confirm() -> None:
     db = SessionLocal()
     try:
         stored = understanding_repository.load_understanding(
-            db, understanding_repository.content_hash(content)
+            db, understanding_repository.session_key(content)
         )
         assert stored is not None
         assert stored.understanding_engine == parsed["understanding_engine"]
     finally:
         db.close()
+
+
+def test_blank_key_row_at_confirm_raises_confirm_error_not_value_error() -> None:
+    """A data row missing its key must be a reviewable ConfirmError (422)."""
+    # 39 fully-populated rows pass the 95% key gate; row 40 lacks the key but
+    # carries dimension data, so it is neither blank nor an aggregate row.
+    rows: list[list[str | None]] = [
+        [f"客户{i}", "华东"] for i in range(39)
+    ]
+    rows.append([None, "华北"])
+    sheet = ParsedSheet(
+        name="客户",
+        header_row_number=1,
+        columns=["客户名称", "区域"],
+        rows=rows,
+        data_row_count=40,
+    )
+    proposal = {
+        "entities": [
+            {"source_sheet": "客户", "key": "customer", "name": "客户",
+             "key_field": "客户名称", "confidence": 0.95,
+             "fields": [
+                 {"column": "客户名称", "type": "string", "role": "identifier",
+                  "confidence": 0.95},
+                 {"column": "区域", "type": "string", "role": "dimension",
+                  "confidence": 0.9},
+             ]}
+        ],
+        "links": [],
+    }
+    result = add_profiles(
+        _workbook([sheet]),
+        llm_client=ChatClient(LLM_CONFIG, transport=ProposalTransport(proposal)),
+    )
+    plans, _ = build_entity_plans(result)
+    model = assemble_model(result, plans, [])
+    assert model is not None and len(plans) == 1
+
+    with pytest.raises(confirmation.ConfirmError, match="is required|主键|校验"):
+        confirmation.extract_records(plans, model)

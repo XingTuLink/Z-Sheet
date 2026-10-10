@@ -189,6 +189,147 @@ def test_bad_entity_key_is_normalized_and_invalid_sheet_ignored() -> None:
     assert "主键列" in joined
 
 
+def test_proposed_key_with_blanks_falls_back_to_unique_column() -> None:
+    """Merged-cell columns (blanks) cannot be keys; a unique column is used."""
+    rows = [
+        ["1", "小程序", "首页", "150"],
+        [None, None, "产品列表", "300"],
+        ["2", "管理员端", "用户管理", "100"],
+        [None, None, "商品管理", "600"],
+        ["3", "运维", "打印机管理", "300"],
+        ["4", "资源", "域名", "100"],
+        ["5", "资源", "服务器", "300"],
+        ["6", "资源", "SSL证书", "158"],
+        ["7", "资源", "打印机", "330"],
+        ["8", "交易", "订单管理", "150"],
+    ]
+    sheet = ParsedSheet(
+        name="报价单",
+        header_row_number=1,
+        columns=["序号", "模块", "功能", "金额"],
+        rows=rows,
+        data_row_count=len(rows),
+    )
+    proposal = {
+        "entities": [
+            {
+                "source_sheet": "报价单",
+                "key": "quote_item",
+                "name": "报价明细",
+                "key_field": "序号",  # blanks + merged cells -> invalid
+                "confidence": 0.9,
+                "fields": [
+                    {"column": "序号", "type": "number", "role": "identifier",
+                     "confidence": 0.85},
+                    {"column": "模块", "type": "string", "role": "dimension",
+                     "confidence": 0.7},
+                    {"column": "功能", "type": "string", "role": "text",
+                     "confidence": 0.9},
+                    {"column": "金额", "type": "money", "role": "measure",
+                     "confidence": 0.9},
+                ],
+            }
+        ],
+        "links": [],
+    }
+    client = ChatClient(LLM_CONFIG, transport=ProposalTransport(proposal))
+    result = add_profiles(_workbook([sheet]), llm_client=client)
+
+    entity = result.sheets[0].inferred_entity
+    assert entity is not None
+    assert entity.key_field == "功能"
+    by_column = {field.column: field for field in result.sheets[0].inferred_fields}
+    assert by_column["功能"].role == "identifier"
+    assert any("主键" in note for note in result.understanding_notes)
+
+
+def test_entity_without_any_nonnull_key_is_excluded_from_model() -> None:
+    # Heavy merged-cell layout: no column is filled on 95% of rows.
+    rows: list[list[str | None]] = [
+        ["A", "1"],
+        [None, None],
+        ["B", None],
+    ]
+    sheet = ParsedSheet(
+        name="矩阵",
+        header_row_number=1,
+        columns=["分类", "档位"],
+        rows=rows,
+        data_row_count=3,
+    )
+    proposal = {
+        "entities": [
+            {
+                "source_sheet": "矩阵",
+                "key": "matrix",
+                "name": "矩阵",
+                "key_field": "分类",  # 2/3 non-null -> below the hard gate
+                "confidence": 0.9,
+                "fields": [
+                    {"column": "分类", "type": "string", "role": "identifier",
+                     "confidence": 0.85},
+                    {"column": "档位", "type": "string", "role": "dimension",
+                     "confidence": 0.8},
+                ],
+            }
+        ],
+        "links": [],
+    }
+    client = ChatClient(LLM_CONFIG, transport=ProposalTransport(proposal))
+    result = add_profiles(_workbook([sheet]), llm_client=client)
+    # No usable key -> the sheet cannot become an entity, so no model at all.
+    assert result.business_model is None
+    assert any("主键" in note for note in result.understanding_notes)
+
+
+def test_duplicate_key_still_generates_but_forces_review() -> None:
+    # Quote-sheet shape: every line is filled, but 功能 repeats ("无" x4).
+    rows: list[list[str | None]] = [
+        ["11", "域名", "无", "100"],
+        ["12", "服务器", "无", "300"],
+        ["13", "SSL证书", "无", "158"],
+        ["14", "打印机", "无", "330"],
+    ]
+    sheet = ParsedSheet(
+        name="报价单",
+        header_row_number=1,
+        columns=["序号", "模块", "功能", "金额"],
+        rows=rows,
+        data_row_count=len(rows),
+    )
+    proposal = {
+        "entities": [
+            {
+                "source_sheet": "报价单",
+                "key": "quote_item",
+                "name": "报价明细",
+                "key_field": "功能",
+                "confidence": 0.95,
+                "fields": [
+                    {"column": "序号", "type": "string", "role": "dimension",
+                     "confidence": 0.95},
+                    {"column": "模块", "type": "string", "role": "dimension",
+                     "confidence": 0.9},
+                    {"column": "功能", "type": "string", "role": "identifier",
+                     "confidence": 0.95},
+                    {"column": "金额", "type": "money", "role": "measure",
+                     "confidence": 0.95},
+                ],
+            }
+        ],
+        "links": [],
+    }
+    client = ChatClient(LLM_CONFIG, transport=ProposalTransport(proposal))
+    result = add_profiles(_workbook([sheet]), llm_client=client)
+    assert result.business_model is not None
+    entity = result.sheets[0].inferred_entity
+    assert entity is not None and entity.key_field == "功能"
+    assert entity.needs_review is True
+    by_column = {f.column: f for f in result.sheets[0].inferred_fields}
+    assert by_column["功能"].needs_review is True
+    assert any("重复值" in note for note in result.understanding_notes)
+
+
 def test_enum_without_value_set_downgrades_to_string() -> None:
     proposal = _person_proposal()
     proposal["entities"][0]["fields"] = [

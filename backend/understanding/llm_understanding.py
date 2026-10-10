@@ -26,6 +26,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from backend.ai.provider import ChatClient, LLMError
+from backend.ingestion.schemas import ParsedSheet
 
 from .model_assembly import EntityPlan
 from .naming import unique_field_keys
@@ -46,6 +47,13 @@ FIELD_ROLES: frozenset[str] = frozenset(
 MAX_SAMPLE_ROWS = 20
 MAX_CELL_LENGTH = 80
 MAX_ENUM_VALUES = 20
+# A business key must be present on (almost) every row — a blank key is the
+# hard failure at Confirm ("key field is required"). Merged-cell continuation
+# columns (e.g. 序号 left blank on sub-rows) never qualify.
+# Duplicate key values do not block generation (rows are stored as a list) but
+# force human review, since repeated keys collapse in keyed lookups.
+KEY_MIN_NONNULL_RATIO = 0.95
+KEY_REVIEW_DISTINCT_RATIO = 0.95
 _ENTITY_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 SYSTEM_PROMPT = """\
@@ -75,7 +83,9 @@ SYSTEM_PROMPT = """\
    - confidence：0 到 1；拿不准的列给 0.6 以下并设 needs_review 为 true。
 4. links 只填有把握的一对多关联：from_entity 是“一”方（主表，其 on_from 列值唯一），
    to_entity 是“多”方子表，on_from/on_to 都填列名；没有把握就给空数组。
-5. 忽略明显无业务意义的占位行（整行只有“.”“-”“/”或空格）。
+5. 忽略明显无业务意义的行：整行只有“.”“-”“/”或空格的占位行，以及
+   “合计/总计/小计/共计/Total”等汇总行（它们不是业务数据，主键列为空）。
+   注意：像序号、模块这类因合并单元格而留空的列存在空值，不能作为 key_field。
 6. 输出必须严格符合以下结构：
 {
   "entities": [
@@ -219,6 +229,30 @@ def _is_enum_viable(spec: LLMFieldSpec) -> bool:
     return bool(values) and len(set(values)) <= MAX_ENUM_VALUES
 
 
+def _column_value_stats(
+    sheet: ParsedSheet, column: str
+) -> tuple[float, float]:
+    """(non-null ratio, distinct-values ratio) of a column over real rows."""
+    total = len(sheet.rows)
+    if total == 0 or column not in sheet.columns:
+        return 0.0, 0.0
+    pos = sheet.columns.index(column)
+    values: list[str] = []
+    for row in sheet.rows:
+        value = row[pos] if pos < len(row) else None
+        if value is not None and value.strip():
+            values.append(value.strip())
+    nonnull_ratio = len(values) / total
+    distinct_ratio = len(set(values)) / len(values) if values else 0.0
+    return nonnull_ratio, distinct_ratio
+
+
+def _is_valid_key_column(sheet: ParsedSheet, column: str) -> bool:
+    """A column can serve as key when it is present on (almost) every row."""
+    nonnull_ratio, _distinct_ratio = _column_value_stats(sheet, column)
+    return nonnull_ratio >= KEY_MIN_NONNULL_RATIO
+
+
 def _merge_field(
     column: str,
     fallback: InferredField,
@@ -305,23 +339,59 @@ def apply_llm_understanding(
             )
         ]
 
-        # Resolve the business key: explicit key_field, else the column the
-        # model marked identifier; else leave None (assembler will reject).
-        key_field = entity_spec.key_field.strip() if entity_spec.key_field else None
-        if key_field is not None and key_field not in sheet.columns:
+        # Resolve the business key against REAL values, not the model's word:
+        # explicit key_field, then the identifier-marked column, then any
+        # column that is present and unique on (nearly) every row. A key with
+        # blanks/duplicates fails Confirm key validation later, so reject it
+        # here rather than producing an un-generatable entity.
+        proposed_key = (
+            entity_spec.key_field.strip() if entity_spec.key_field else None
+        )
+        if proposed_key is not None and proposed_key not in sheet.columns:
             notes.append(
-                f"实体「{entity_spec.name}」的主键列「{key_field}」不存在，"
-                "已尝试改用 identifier 列"
+                f"实体「{entity_spec.name}」的主键列「{proposed_key}」不存在，"
+                "已尝试改用其他列"
             )
-            key_field = None
+            proposed_key = None
+
+        candidate_columns: list[str] = []
+        if proposed_key is not None:
+            candidate_columns.append(proposed_key)
+        for spec in entity_spec.fields:
+            column = spec.column.strip()
+            if spec.role == "identifier" and column in sheet.columns:
+                candidate_columns.append(column)
+        candidate_columns.extend(sheet.columns)
+
+        key_field: str | None = None
+        for candidate in dict.fromkeys(candidate_columns):
+            if _is_valid_key_column(sheet, candidate):
+                key_field = candidate
+                break
+
+        if (
+            key_field is not None
+            and proposed_key is not None
+            and key_field != proposed_key
+        ):
+            notes.append(
+                f"实体「{entity_spec.name}」提议的主键列「{proposed_key}」在实际"
+                f"数据中存在空值或重复，已改用「{key_field}」作为主键"
+            )
+        key_has_duplicates = False
+        if key_field is not None:
+            _nonnull, distinct_ratio = _column_value_stats(sheet, key_field)
+            if distinct_ratio < KEY_REVIEW_DISTINCT_RATIO:
+                key_has_duplicates = True
+                notes.append(
+                    f"实体「{entity_spec.name}」的主键列「{key_field}」存在重复值，"
+                    "生成后重复行的详情会相互覆盖，请人工确认主键选择"
+                )
         if key_field is None:
-            identifier_specs = [
-                spec
-                for spec in entity_spec.fields
-                if spec.role == "identifier" and spec.column.strip() in sheet.columns
-            ]
-            if identifier_specs:
-                key_field = identifier_specs[0].column.strip()
+            notes.append(
+                f"实体「{entity_spec.name}」找不到每行都非空的主键列"
+                "（可能存在合并单元格空行），该工作表未纳入模型"
+            )
 
         # Align the key field's role to identifier in the merged fields.
         if key_field is not None:
@@ -330,11 +400,15 @@ def apply_llm_understanding(
             if key_field_model.role != "identifier":
                 key_field_model.role = "identifier"  # type: ignore[assignment]
                 key_field_model.role_signals = ["llm:promoted_from_key_field"]
+            if key_has_duplicates:
+                key_field_model.needs_review = True
+                key_field_model.role_needs_review = True
 
         needs_review = (
             entity_spec.needs_review
             or entity_spec.confidence < CONFIDENCE_HIGH
             or key_field is None
+            or key_has_duplicates
         )
         signals = ["llm"]
         if entity_spec.reason:

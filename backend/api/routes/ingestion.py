@@ -86,7 +86,7 @@ async def parse_file(
     # Cache the reviewed understanding server-side so Confirm consumes exactly
     # this result (a second, non-deterministic LLM call could disagree).
     understanding_repository.save_understanding(
-        db, understanding_repository.content_hash(content), result
+        db, understanding_repository.session_key(content), result
     )
     return result
 
@@ -137,7 +137,7 @@ async def parse_file_stream(
                     try:
                         understanding_repository.save_understanding(
                             session_db,
-                            understanding_repository.content_hash(content),
+                            understanding_repository.session_key(content),
                             result,
                         )
                     finally:

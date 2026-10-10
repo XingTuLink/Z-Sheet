@@ -167,11 +167,28 @@ def _parse_csv(file_name: str, content: bytes) -> ParsedSheet:
 # row count and destroys uniqueness statistics on small sheets).
 _CONTENT_CHAR_RE = re.compile(r"[0-9A-Za-z\u4e00-\u9fff]")
 
+# Aggregate/footer rows ("合计 3138") are spreadsheet totals, not business
+# records. Their per-row key column is empty, so they otherwise fail key
+# validation at Confirm time.
+_TOTAL_MARKERS = frozenset(
+    {"合计", "共计", "总计", "小计", "累计", "total", "sum", "grand total"}
+)
+
 
 def _is_blank(row: list[Cell]) -> bool:
     return not any(
         cell is not None and _CONTENT_CHAR_RE.search(cell) for cell in row
     )
+
+
+def _is_summary_row(row: list[Cell]) -> bool:
+    for cell in row:
+        if cell is None:
+            continue
+        text = cell.strip().strip(":：").strip().lower()
+        if text in _TOTAL_MARKERS:
+            return True
+    return False
 
 
 def _build_sheet(name: str, rows: list[list[Cell]]) -> ParsedSheet:
@@ -208,8 +225,12 @@ def _build_sheet(name: str, rows: list[list[Cell]]) -> ParsedSheet:
         warnings.append(f"duplicate header values: {', '.join(duplicates)}")
 
     data_rows: list[list[Cell]] = []
+    summary_rows_dropped = 0
     for raw in rows[detection.row_index + 1 :]:
         if _is_blank(raw):
+            continue
+        if _is_summary_row(raw):
+            summary_rows_dropped += 1
             continue
         aligned = [raw[pos] if pos < len(raw) else None for pos in range(width)]
         data_rows.append(aligned)
@@ -217,6 +238,12 @@ def _build_sheet(name: str, rows: list[list[Cell]]) -> ParsedSheet:
             raise ParseError(
                 f"sheet {name!r} exceeds {MAX_DATA_ROWS} data rows; V0.1 limit"
             )
+
+    if summary_rows_dropped:
+        warnings.append(
+            f"ignored {summary_rows_dropped} aggregate/total row(s) "
+            "(合计/总计/小计 …)"
+        )
 
     if not data_rows:
         warnings.append("sheet has a header row but no data rows")

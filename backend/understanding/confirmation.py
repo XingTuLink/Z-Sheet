@@ -212,7 +212,12 @@ def extract_records(
                 out[field_key] = _coerce_cell(field_map[field_key], cell, where)
             rows.append(out)
         raw[plan.key] = rows
-    return validate_records(model, raw)
+    try:
+        return validate_records(model, raw)
+    except ValueError as exc:
+        # Key presence / type / enum problems with the workbook's own rows:
+        # a reviewable 422 with the offending location, never a raw 500.
+        raise ConfirmError(f"表格数据未通过模型校验：{exc}") from exc
 
 
 def confirm_workbook(
@@ -239,7 +244,7 @@ def confirm_workbook(
     # Cache miss (e.g. server restarted between parse and confirm) falls back
     # to re-running the pipeline; with the rules engine this is identical.
     result: ProfiledParsedWorkbook | None = understanding_repository.load_understanding(
-        db, understanding_repository.content_hash(content)
+        db, understanding_repository.session_key(content)
     )
     if result is None:
         result = add_profiles(workbook)
