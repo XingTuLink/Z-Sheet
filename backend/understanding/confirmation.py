@@ -46,6 +46,31 @@ CONFIRM_OPERATOR = "confirm"
 
 _CURRENCY_CHARS_RE = re.compile(r"[¥￥$€￠£,\s]|元|块")
 
+# ISO 8601 reduced-precision dates inside an already-accepted date column:
+# a bare year/year-month names a whole period, anchored to its first day.
+# Kept OUT of type inference (type_inference.is_date) on purpose — otherwise
+# ordinary 4-digit numeric columns could be mistaken for years.
+_PARTIAL_DATE_PATTERNS = (
+    re.compile(r"^(\d{4})$"),
+    re.compile(r"^(\d{4})[-/.](\d{1,2})$"),
+    re.compile(r"^(\d{4})年(?:(\d{1,2})月?)?$"),
+)
+
+
+def _parse_partial_date(text: str) -> str | None:
+    """Normalize 'YYYY' / 'YYYY-MM' / 'YYYY年M月' to an ISO day, else None."""
+    for pattern in _PARTIAL_DATE_PATTERNS:
+        match = pattern.match(text)
+        if match is None:
+            continue
+        year = int(match.group(1))
+        month = int(match.group(2)) if match.lastindex and match.lastindex >= 2 else 1
+        try:
+            return dt.date(year, month, 1).isoformat()
+        except ValueError:
+            return None
+    return None
+
 
 class ConfirmError(Exception):
     """A 422-class failure with optional machine-readable unresolved items."""
@@ -162,7 +187,13 @@ def _normalize_date(text: str, where: str) -> str:
             return dt.datetime.strptime(candidate, fmt).date().isoformat()
         except ValueError:
             continue
-    raise ConfirmError(f"{where}：日期 {text!r} 无法识别，请使用类似 2026-01-03 的格式")
+    partial = _parse_partial_date(candidate)
+    if partial is not None:
+        return partial
+    raise ConfirmError(
+        f"{where}：日期 {text!r} 无法识别，请使用类似 2026-01-03 的格式"
+        "（只有年份时可写 2022，将按 2022-01-01 处理）"
+    )
 
 
 def _coerce_cell(field: BusinessField, cell: Cell, where: str) -> Any:

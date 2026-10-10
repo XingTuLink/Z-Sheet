@@ -17,6 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.api.main import app
+from backend.understanding import confirmation
 from backend.understanding.confirmation import (
     ConfirmDecisions,
     ConfirmError,
@@ -262,6 +263,84 @@ def test_confirm_rejects_malformed_decisions_json():
         data={"decisions": "{not json"},
     )
     assert resp.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("2022", "2022-01-01"),          # year-only (genomics Collection_Date)
+        (" 2022 ", "2022-01-01"),        # surrounding whitespace
+        ("2022-03", "2022-03-01"),       # year-month, dash
+        ("2022/3", "2022-03-01"),        # year-month, slash, no zero pad
+        ("2022.03", "2022-03-01"),       # year-month, dot
+        ("2022年", "2022-01-01"),        # Chinese year
+        ("2022年3月", "2022-03-01"),     # Chinese year-month
+        ("2022-03-15", "2022-03-15"),    # full ISO still wins
+        ("2022/03/15", "2022-03-15"),    # legacy full format still works
+    ],
+)
+def test_normalize_date_accepts_partial_precision(raw: str, expected: str):
+    assert confirmation._normalize_date(raw, "测试") == expected
+
+
+@pytest.mark.parametrize("raw", ["2022-13", "2022年13月", "明年", "22", "2022-03-15-09"])
+def test_normalize_date_still_rejects_garbage(raw: str):
+    with pytest.raises(ConfirmError, match="无法识别"):
+        confirmation._normalize_date(raw, "工作表「T」第 2 行字段「D」")
+
+
+def _genome_xlsx_bytes() -> bytes:
+    """Single-sheet workbook whose date column contains a bare year cell."""
+    wb = openpyxl.Workbook()
+    sheet = wb.worksheets[0]
+    sheet.title = "Genomic assembly & resequencing"
+    sheet.append(["样本编号", "Collection_Date"])
+    sheet.append(["S-1", "2021-03-01"])
+    sheet.append(["S-2", "2021-08-14"])
+    sheet.append(["S-3", "2021-11-02"])
+    sheet.append(["S-4", "2022-01-20"])
+    sheet.append(["S-5", "2022-04-09"])
+    sheet.append(["S-6", "2022"])  # year-only: the reported failure
+    sheet.append(["S-7", "2022-09-30"])
+    sheet.append(["S-8", "2023-02-11"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_confirm_accepts_year_only_date_cell():
+    """A bare '2022' in an inferred date column confirms as 2022-01-01."""
+    content = _genome_xlsx_bytes()
+    files = {
+        "file": (
+            "genomics.xlsx",
+            content,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    }
+    parse_resp = client.post("/api/v1/ingestion/parse/stream", files=files)
+    assert parse_resp.status_code == 200, parse_resp.text
+    result = None
+    for block in parse_resp.text.strip().split("\n\n"):
+        if block.startswith("event: result"):
+            result = json.loads(block.split("data: ", 1)[1])
+    assert result is not None
+    entity = result["business_model"]["entities"][0]
+    date_field = next(f for f in entity["fields"] if "Collection" in f["name"])
+    assert date_field["type"] == "date"
+
+    decisions = {"acknowledged": _acknowledged(result), "links": {}}
+    resp = client.post(
+        "/api/v1/ingestion/confirm",
+        files=files,
+        data={"decisions": json.dumps(decisions)},
+    )
+    assert resp.status_code == 200, resp.text
+
+    boot = client.get("/api/v1/runtime/workspace/bootstrap").json()
+    rows = boot["records"][entity["key"]]
+    year_only = next(row for row in rows if row[entity["key_field"]] == "S-6")
+    assert year_only[date_field["key"]] == "2022-01-01"
 
 
 def test_apply_link_decisions_unit():
