@@ -16,9 +16,10 @@ from backend.storage.models import UnderstandingSessionRecord
 from backend.understanding.schemas import ProfiledParsedWorkbook
 
 # Bump whenever parser/understanding semantics change: stale sessions from an
-# older pipeline (e.g. cached before aggregate rows were filtered, or before
-# metrics carried AI business definitions) must never be reused by Confirm.
-SESSION_SCHEMA_VERSION = "v3"
+# older pipeline (e.g. cached before aggregate rows were filtered, before
+# metrics carried AI business definitions, or before dedup claims were banned
+# from those definitions) must never be reused by Confirm.
+SESSION_SCHEMA_VERSION = "v4"
 
 
 def content_hash(content: bytes) -> str:

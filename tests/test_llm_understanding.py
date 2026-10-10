@@ -365,6 +365,51 @@ def test_llm_metric_definitions_validated_against_workbook() -> None:
     assert "avg" in notes and "业务口径" in notes
 
 
+def test_dedup_claim_rejected_but_disclaimer_accepted() -> None:
+    proposal = _person_proposal()
+    proposal["metrics"] = [
+        # Claims dedup the engine never performs -> dropped, template fallback.
+        {"source_sheet": "校对总表", "op": "count",
+         "business_definition": "按姓名去重统计的外审人员人数", "confidence": 0.9},
+        {"source_sheet": "校对总表", "op": "count",
+         "business_definition": "外审人员唯一计数（distinct name）", "confidence": 0.9},
+        # Honestly disclaims dedup -> accepted (denial phrases are stripped).
+        {"source_sheet": "校对总表", "op": "count",
+         "business_definition": "全部外审人员记录条数，不做去重，重复行也计入",
+         "confidence": 0.92},
+    ]
+    client = ChatClient(LLM_CONFIG, transport=ProposalTransport(proposal))
+    result = add_profiles(_workbook([_person_sheet()]), llm_client=client)
+
+    definitions = result.metric_definitions
+    assert len(definitions) == 1
+    assert definitions[0].business_definition == "全部外审人员记录条数，不做去重，重复行也计入"
+
+    assert result.business_model is not None
+    metrics = cast(list[dict[str, Any]], result.business_model["metrics"])
+    metric = next(m for m in metrics if m["key"] == "proofreader_count")
+    assert metric["business_definition"] == "全部外审人员记录条数，不做去重，重复行也计入"
+
+    dedup_notes = [n for n in result.understanding_notes if "声称去重" in n]
+    assert len(dedup_notes) == 2  # one note per rejected proposal
+
+
+def test_dedup_claim_falls_back_to_template_definition() -> None:
+    proposal = _person_proposal()
+    proposal["metrics"] = [
+        {"source_sheet": "校对总表", "op": "count",
+         "business_definition": "按姓名去重后的人数", "confidence": 0.9},
+    ]
+    client = ChatClient(LLM_CONFIG, transport=ProposalTransport(proposal))
+    result = add_profiles(_workbook([_person_sheet()]), llm_client=client)
+
+    assert result.metric_definitions == []
+    assert result.business_model is not None
+    metrics = cast(list[dict[str, Any]], result.business_model["metrics"])
+    metric = next(m for m in metrics if m["key"] == "proofreader_count")
+    assert metric["business_definition"].endswith("（自动生成口径）")
+
+
 def test_low_confidence_metric_definition_enters_review_queue() -> None:
     proposal = _person_proposal()
     proposal["metrics"] = [

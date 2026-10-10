@@ -51,6 +51,22 @@ MAX_CELL_LENGTH = 80
 MAX_ENUM_VALUES = 20
 MAX_METRIC_DEFINITION_LENGTH = 120
 METRIC_OPS: frozenset[str] = frozenset({"count", "sum"})
+# Metric definitions are shown verbatim on the dashboard, so they must not
+# promise semantics the engine never executes. count counts every valid row
+# (duplicates included) and sum totals raw numeric values — there is no
+# distinct/dedup path. Strip explicit disclaimers ("不做去重") first so a
+# definition that honestly says it does NOT dedupe still passes.
+_DEDUP_DISCLAIMER_RE = re.compile(r"不(?:做|进行|需|用|会)?去重|不重复计数")
+_UNSUPPORTED_DEDUP_RE = re.compile(
+    r"去重|唯一值?计数|count\s+distinct|distinct", re.IGNORECASE
+)
+
+
+def _claims_unsupported_dedup(definition: str) -> bool:
+    scrubbed = _DEDUP_DISCLAIMER_RE.sub("", definition)
+    return bool(_UNSUPPORTED_DEDUP_RE.search(scrubbed))
+
+
 # A business key must be present on (almost) every row — a blank key is the
 # hard failure at Confirm ("key field is required"). Merged-cell continuation
 # columns (e.g. 序号 left blank on sub-rows) never qualify.
@@ -94,9 +110,13 @@ SYSTEM_PROMPT = """\
    - 每个实体给一条 op="count"、field=null 的口径，说明“总数”数的是什么业务对象；
    - 只对真正的流水金额列（如金额、费用、收入、工资合计）给 op="sum" 的口径，
      field 填列名；单价、价格、报价等目录属性列不要给 sum；
-   - 口径用一句中文说清统计范围（例如“订单金额合计，不含退款”“含税前报价”），
-     不超过 50 字，不要复述指标名称；
-   - confidence：口径明确（能看出包含/排除什么）给 0.9；只是泛泛描述给 0.7 以下。
+   - 口径必须与系统实际算法一致，不得描述引擎不会执行的动作：
+     count 是每条有效记录计一次的记录条数，重复行也计入，严禁写“去重/唯一计数/
+     distinct”；sum 是该列全部有效数值之和，空值与非数字单元格忽略。
+     可以说明这批数据实际包含什么（如“含小程序端与管理员端功能及采购项”），
+     但不要承诺源数据里无法保证的排除条件（如数据中确有取消单就不要写“不含取消单”）；
+   - 口径用一句中文说清统计对象与范围，不超过 50 字，不要复述指标名称；
+   - confidence：口径明确（能看出统计的是什么）给 0.9；只是泛泛描述给 0.7 以下。
 7. 输出必须严格符合以下结构：
 {
   "entities": [
@@ -120,9 +140,9 @@ SYSTEM_PROMPT = """\
   ],
   "metrics": [
     {"source_sheet": "订单", "op": "count", "field": null,
-     "business_definition": "全部成交订单的条数，不含已取消订单", "confidence": 0.9},
+     "business_definition": "订单表全部订单记录条数，每行计一次，重复行也计入", "confidence": 0.9},
     {"source_sheet": "订单", "op": "sum", "field": "金额",
-     "business_definition": "订单金额合计，不含退款", "confidence": 0.9}
+     "business_definition": "订单「金额」列的全部有效数值之和，空值与非数字忽略", "confidence": 0.9}
   ]
 }"""
 
@@ -516,6 +536,12 @@ def build_metric_definitions(
         definition = spec.business_definition.strip()
         if not definition:
             notes.append(f"工作表「{sheet_name}」的 {op} 指标缺少业务口径，已忽略")
+            continue
+        if _claims_unsupported_dedup(definition):
+            notes.append(
+                f"工作表「{sheet_name}」的 {op} 指标口径声称去重/唯一计数，"
+                "V0.1 指标不做去重，该口径已忽略并回退为系统模板"
+            )
             continue
         if len(definition) > MAX_METRIC_DEFINITION_LENGTH:
             definition = definition[:MAX_METRIC_DEFINITION_LENGTH] + "…"
