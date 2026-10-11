@@ -505,9 +505,27 @@ def _ground_intent(
         "reason": spec.reason.strip(),
     }
 
+    # Rename is handled first: with entity + no field it renames the entity
+    # itself ("只有 entity → 改实体显示名" per the prompt contract).
+    if kind is IntentKind.RENAME:
+        new_name = _clean_new_name(params.get("new_name"))
+        if not new_name:
+            notes.append("改名意图缺少新名称（params.new_name），已忽略")
+            return None
+        base["new_name"] = new_name
+        if spec.field:
+            field_key = _resolve_node(spec.field, _field_candidates(entity))
+            if field_key is None:
+                notes.append(
+                    f"意图 rename 引用的字段 {spec.field!r} 在实体「{entity.name}」"
+                    "中不存在或名称有歧义，已忽略"
+                )
+                return None
+            base["field_key"] = field_key
+        return ParsedIntent(**base)
+
     # Intents that additionally address a field of the entity.
     needs_field = kind in {
-        IntentKind.RENAME,
         IntentKind.FIELD_REMOVE,
         IntentKind.FIELD_UPDATE,
         IntentKind.VIEW_FILTER_ADD,
@@ -540,14 +558,6 @@ def _ground_intent(
                 )
                 return None
         base["field_key"] = field_key
-
-    if kind is IntentKind.RENAME:
-        new_name = _clean_new_name(params.get("new_name"))
-        if not new_name:
-            notes.append("字段改名意图缺少新名称（params.new_name），已忽略")
-            return None
-        base["new_name"] = new_name
-        return ParsedIntent(**base)
 
     if kind is IntentKind.FIELD_ADD:
         new_name = _clean_new_name(params.get("name")) or _clean_new_name(spec.field)
