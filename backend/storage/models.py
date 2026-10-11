@@ -60,6 +60,28 @@ class AppDataRecord(Base):
     )
 
 
+class PatchSessionRecord(Base):
+    """Server-side NL patch preview awaiting the user's decision (Day 25).
+
+    Preview stores the parsed intents plus the fully generated (and dry-run
+    validated) patch ops here under a random token. Confirm/reject reads the
+    cached ops back: the client only submits the token and its decision, so it
+    cannot tamper with the patch. ``base_version`` pins the model the preview
+    was generated against; confirm refuses if the app moved on meanwhile.
+    """
+
+    __tablename__ = "patch_sessions"
+
+    session_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    app_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    base_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+
 class UnderstandingSessionRecord(Base):
     """Server-side understanding result keyed by uploaded file hash (Day 22).
 

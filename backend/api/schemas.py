@@ -58,6 +58,39 @@ class ConfirmResponse(BaseModel):
     record_counts: dict[str, int]
 
 
+class PatchPreviewRequest(BaseModel):
+    """One NL modification sentence against the current model version."""
+
+    text: str = Field(min_length=1, max_length=500)
+    operator: str = "local"
+
+
+class PatchChangeOut(BaseModel):
+    kind: str
+    risk: str
+    summary: str
+
+
+class PatchUnsupportedOut(BaseModel):
+    category: str
+    reason: str
+    suggestion: str
+
+
+class PatchPreviewResponse(BaseModel):
+    session_id: str
+    base_version: int
+    actionable: bool
+    requires_confirmation: bool
+    changes: list[PatchChangeOut]
+    unsupported: list[PatchUnsupportedOut]
+    notes: list[str]
+
+
+class PatchDecisionResponse(BaseModel):
+    status: str
+
+
 class RecordPayload(BaseModel):
     """One business row submitted by the generated Form view."""
 

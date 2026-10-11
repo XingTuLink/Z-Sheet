@@ -1,13 +1,16 @@
 import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 
 import { fetchBootstrap } from '../api/runtime'
 import { resolveAppRoute } from './appRoute'
+import { PatchDialog } from './PatchDialog'
 import { RuntimeProvider } from './RuntimeProvider'
 
 export function AppLayout() {
   const location = useLocation()
   const route = resolveAppRoute(location.pathname)
+  const [patchOpen, setPatchOpen] = useState(false)
   const { data, isLoading, isError, isFetching, refetch } = useQuery({
     queryKey: ['bootstrap', route.appKey],
     queryFn: () => fetchBootstrap(route.appKey),
@@ -90,6 +93,15 @@ export function AppLayout() {
             ))}
           </nav>
           <div className="topbar-right">
+            {!route.isDemo && (
+              <button
+                type="button"
+                className="btn btn-primary btn-patch-entry"
+                onClick={() => setPatchOpen(true)}
+              >
+                一句话修改
+              </button>
+            )}
             {route.isDemo ? (
               <NavLink to="/app" className="nav-link">
                 我的系统
@@ -107,6 +119,12 @@ export function AppLayout() {
         <main className="content">
           <Outlet />
         </main>
+        <PatchDialog
+          open={patchOpen}
+          appKey={route.appKey}
+          basePath={route.basePath}
+          onClose={() => setPatchOpen(false)}
+        />
       </div>
     </RuntimeProvider>
   )
