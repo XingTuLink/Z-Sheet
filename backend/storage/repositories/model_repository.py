@@ -20,8 +20,8 @@ from sqlalchemy.orm import Session
 
 from backend.domain.models import BusinessModel
 from backend.domain.serialization import model_from_yaml
-from backend.patch.apply import PatchError, apply_patch
-from backend.patch.json_patch import PatchDocument
+from backend.patch.apply import PatchError
+from backend.patch.validation import validate_patch_snapshot
 from backend.storage.models import ModelVersionRecord
 
 APP_KEY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
@@ -186,17 +186,12 @@ def apply_patch_as_new_version(
     validate_app_key(app_key)
     current = get_current(db, app_key)
 
-    # Layer 1: patch shape (RFC 6902 subset).
-    document = PatchDocument.from_raw(raw_ops)
-    # Layer 2: structural application against the current snapshot.
-    new_snapshot = apply_patch(current.snapshot, document.ops)
-    # Layer 3: full Business Model semantics (raises ValidationError on failure).
-    model = BusinessModel.model_validate(new_snapshot)
+    new_snapshot = validate_patch_snapshot(current.snapshot, raw_ops)
 
     record = ModelVersionRecord(
         app_key=app_key,
         version=current.version + 1,
-        snapshot=model.model_dump(mode="json"),
+        snapshot=new_snapshot,
         patch=raw_ops,
         operator=operator,
         source_request=source_request,
