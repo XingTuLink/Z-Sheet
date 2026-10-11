@@ -22,6 +22,10 @@ class PatchSubmitRequest(BaseModel):
     operator: str = "local"
 
 
+class RollbackRequest(BaseModel):
+    operator: str = "local"
+
+
 class VersionMeta(BaseModel):
     id: int
     app_key: str
