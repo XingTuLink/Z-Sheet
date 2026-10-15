@@ -101,6 +101,20 @@ links:
     review_reason: "仅凭列名与值重叠推断，无外键定义"
 
 metrics:
+  - key: customer_count
+    name: "客户总数"
+    entity: customer
+    formula:
+      op: count
+    business_definition: "客户记录的总条数（自动生成口径）"
+    confidence: 0.9
+  - key: order_count
+    name: "订单总数"
+    entity: order
+    formula:
+      op: count
+    business_definition: "订单记录的总条数（自动生成口径）"
+    confidence: 0.9
   - key: total_amount
     name: "订单总额"
     entity: order
@@ -108,6 +122,7 @@ metrics:
       op: sum
       field: amount
     business_definition: "订单金额合计，不含退款"
+    confidence: 0.9
 
 views:
   - key: customer_list
@@ -167,6 +182,8 @@ views:
     kind: dashboard
     title: "首页"
     metrics:
+      - customer_count
+      - order_count
       - total_amount
 
 navigation:

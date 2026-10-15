@@ -22,6 +22,10 @@ class PatchSubmitRequest(BaseModel):
     operator: str = "local"
 
 
+class RollbackRequest(BaseModel):
+    operator: str = "local"
+
+
 class VersionMeta(BaseModel):
     id: int
     app_key: str
@@ -56,3 +60,72 @@ class ConfirmResponse(BaseModel):
     links_accepted: list[str]
     links_rejected: list[str]
     record_counts: dict[str, int]
+
+
+class PatchPreviewRequest(BaseModel):
+    """One NL modification sentence against the current model version."""
+
+    text: str = Field(min_length=1, max_length=500)
+    operator: str = "local"
+
+
+class PatchChangeOut(BaseModel):
+    kind: str
+    risk: str
+    summary: str
+
+
+class PatchUnsupportedOut(BaseModel):
+    category: str
+    reason: str
+    suggestion: str
+
+
+class PatchPreviewResponse(BaseModel):
+    session_id: str
+    base_version: int
+    actionable: bool
+    requires_confirmation: bool
+    changes: list[PatchChangeOut]
+    unsupported: list[PatchUnsupportedOut]
+    notes: list[str]
+
+
+class PatchDecisionResponse(BaseModel):
+    status: str
+
+
+class RecordPayload(BaseModel):
+    """One business row submitted by the generated Form view."""
+
+    row: dict[str, Any]
+
+
+class RecordMutationResponse(BaseModel):
+    app_key: str
+    entity: str
+    key: str
+    row: dict[str, Any]
+
+
+class PublicationRequest(BaseModel):
+    """Create a publication: chosen public slug."""
+
+    slug: str = Field(..., min_length=1, max_length=64)
+
+
+class PublicationUpdateRequest(BaseModel):
+    """Change the slug, pin the newest model version, or both at once."""
+
+    slug: str | None = Field(default=None, min_length=1, max_length=64)
+    republish: bool = False
+
+
+class PublicationResponse(BaseModel):
+    app_key: str
+    slug: str
+    status: str
+    model_version: int
+    current_version: int
+    public: bool
+    published_at: datetime | None = None

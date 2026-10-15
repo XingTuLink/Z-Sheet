@@ -1,0 +1,658 @@
+"""LLM-powered understanding of parsed workbooks (Day 21).
+
+The deterministic engine (type/role/entity/link inference) only recognizes a
+frozen set of sales-style patterns. This module asks an OpenAI-compatible LLM
+to read sheet names, headers and sample rows and propose the Business Model
+understanding (entities, key fields, column types/roles, one-to-many links) as
+strict JSON.
+
+Safety properties:
+
+- every LLM proposal is validated against the *actually parsed* workbook:
+  sheets and columns must exist, types/roles must be from the frozen
+  vocabulary, links must resolve to real entities and columns;
+- columns the model omits fall back to the deterministic inference already
+  attached to the sheet, so one bad proposal never loses a column;
+- entity keys are normalized to the assembler's ``[a-z][a-z0-9_]*`` namespace;
+- nothing here touches the database or the frontend contract — the output is
+  the same Inferred* structures the deterministic pipeline produces.
+"""
+
+from __future__ import annotations
+
+import re
+from typing import Literal
+
+from pydantic import BaseModel, Field, ValidationError, field_validator
+
+from backend.ai.provider import ChatClient, LLMError
+from backend.ingestion.schemas import ParsedSheet
+from backend.logging_config import get_logger
+
+from .model_assembly import EntityPlan
+from .naming import unique_field_keys
+from .schemas import (
+    CONFIDENCE_HIGH,
+    InferredEntity,
+    InferredField,
+    InferredLink,
+    InferredMetricDefinition,
+    ProfiledParsedSheet,
+    ProfiledParsedWorkbook,
+)
+
+FIELD_TYPES: frozenset[str] = frozenset(
+    {"string", "number", "money", "date", "enum", "phone"}
+)
+
+logger = get_logger("understanding.llm")
+FIELD_ROLES: frozenset[str] = frozenset(
+    {"identifier", "dimension", "measure", "time", "enum", "text"}
+)
+MAX_SAMPLE_ROWS = 20
+MAX_CELL_LENGTH = 80
+MAX_ENUM_VALUES = 20
+MAX_METRIC_DEFINITION_LENGTH = 120
+METRIC_OPS: frozenset[str] = frozenset({"count", "sum"})
+# Metric definitions are shown verbatim on the dashboard, so they must not
+# promise semantics the engine never executes. count counts every valid row
+# (duplicates included) and sum totals raw numeric values — there is no
+# distinct/dedup path. Strip explicit disclaimers ("不做去重") first so a
+# definition that honestly says it does NOT dedupe still passes.
+_DEDUP_DISCLAIMER_RE = re.compile(r"不(?:做|进行|需|用|会)?去重|不重复计数")
+_UNSUPPORTED_DEDUP_RE = re.compile(
+    r"去重|唯一值?计数|count\s+distinct|distinct", re.IGNORECASE
+)
+
+
+def _claims_unsupported_dedup(definition: str) -> bool:
+    scrubbed = _DEDUP_DISCLAIMER_RE.sub("", definition)
+    return bool(_UNSUPPORTED_DEDUP_RE.search(scrubbed))
+
+
+# A business key must be present on (almost) every row — a blank key is the
+# hard failure at Confirm ("key field is required"). Merged-cell continuation
+# columns (e.g. 序号 left blank on sub-rows) never qualify.
+# Duplicate key values do not block generation (rows are stored as a list) but
+# force human review, since repeated keys collapse in keyed lookups.
+KEY_MIN_NONNULL_RATIO = 0.95
+KEY_REVIEW_DISTINCT_RATIO = 0.95
+_ENTITY_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+
+SYSTEM_PROMPT = """\
+你是 Z-Sheet 的业务建模引擎。用户上传 Excel/CSV，你会收到每个非空工作表的名称、表头列与样例数据。
+你的职责：把表格理解成业务模型。只输出一个 JSON 对象，不要输出任何解释、注释或 Markdown 代码块。
+
+理解规则：
+1. 每个非空工作表对应一个实体。
+   - key：英文小写 snake_case，语义化（例如 reviewer、employee、asset、project、supplier）；
+   - name：准确的中文业务名（例如 外审人员、固定资产、项目、供应商）；
+   - 只有表格确实是客户/订单/商品时，才使用 customer/order/product。
+2. key_field 是业务主键列：能唯一标识一行人/物/事项的名称或编号列。
+   “序号”“行号”“No.”这类纯流水号不是业务主键，除非没有任何其他唯一列。
+   每个实体有且仅有一个 role=identifier 的列，就是 key_field；
+   电话、身份证号、银行账号等虽然唯一，但不是业务主键，role 用 text/dimension。
+3. fields 必须覆盖工作表的每一列：
+   - type 取值：string | number | money | date | enum | phone
+     · money：金额、价格、费用、成本、工资等货币数值
+     · date：日期/时间列（样例形如 2026-01-01、2026/1/1）
+     · phone：手机、电话
+     · enum：只有少量固定取值的分类列，必须给出 enum_values
+     · number：年龄、数量等非货币数值
+     · 其余为 string
+   - role 取值：identifier | dimension | measure | time | enum | text
+     · identifier：业务主键列；dimension：分类/标签/另一张表的名称；measure：数值或金额
+     · time：日期；enum：代码式枚举；text：备注、地址、描述等长文本
+   - confidence：0 到 1；拿不准的列给 0.6 以下并设 needs_review 为 true。
+4. links 只填有把握的一对多关联：from_entity 是“一”方（主表，其 on_from 列值唯一），
+   to_entity 是“多”方子表，on_from/on_to 都填列名；没有把握就给空数组。
+5. 忽略明显无业务意义的行：整行只有“.”“-”“/”或空格的占位行，以及
+   “合计/总计/小计/共计/Total”等汇总行（它们不是业务数据，主键列为空）。
+   注意：像序号、模块这类因合并单元格而留空的列存在空值，不能作为 key_field。
+6. metrics 为首页指标提供业务口径（business_definition）：
+   - 每个实体给一条 op="count"、field=null 的口径，说明“总数”数的是什么业务对象；
+   - 只对真正的流水金额列（如金额、费用、收入、工资合计）给 op="sum" 的口径，
+     field 填列名；单价、价格、报价等目录属性列不要给 sum；
+   - 口径必须与系统实际算法一致，不得描述引擎不会执行的动作：
+     count 是每条有效记录计一次的记录条数，重复行也计入，严禁写“去重/唯一计数/
+     distinct”；sum 是该列全部有效数值之和，空值与非数字单元格忽略。
+     可以说明这批数据实际包含什么（如“含小程序端与管理员端功能及采购项”），
+     但不要承诺源数据里无法保证的排除条件（如数据中确有取消单就不要写“不含取消单”）；
+   - 口径用一句中文说清统计对象与范围，不超过 50 字，不要复述指标名称；
+   - confidence：口径明确（能看出统计的是什么）给 0.9；只是泛泛描述给 0.7 以下。
+7. 输出必须严格符合以下结构：
+{
+  "entities": [
+    {
+      "source_sheet": "工作表名",
+      "key": "reviewer",
+      "name": "外审人员",
+      "key_field": "姓名",
+      "confidence": 0.9,
+      "needs_review": false,
+      "reason": "一句话中文理由",
+      "fields": [
+        {"column": "姓名", "type": "string", "role": "identifier",
+         "confidence": 0.9, "needs_review": false, "enum_values": [], "reason": ""}
+      ]
+    }
+  ],
+  "links": [
+    {"from_entity": "customer", "to_entity": "order",
+     "on_from": "客户名称", "on_to": "客户名称", "confidence": 0.8, "reason": ""}
+  ],
+  "metrics": [
+    {"source_sheet": "订单", "op": "count", "field": null,
+     "business_definition": "订单表全部订单记录条数，每行计一次，重复行也计入", "confidence": 0.9},
+    {"source_sheet": "订单", "op": "sum", "field": "金额",
+     "business_definition": "订单「金额」列的全部有效数值之和，空值与非数字忽略", "confidence": 0.9}
+  ]
+}"""
+
+
+# --- raw LLM JSON shapes (lenient; semantic validation happens against workbook) ---------
+
+
+class LLMFieldSpec(BaseModel):
+    column: str
+    type: str
+    role: str = "text"
+    confidence: float = 0.8
+    needs_review: bool = False
+    enum_values: list[str] = Field(default_factory=list)
+    reason: str = ""
+
+    @field_validator("confidence")
+    @classmethod
+    def _clamp(cls, value: float) -> float:
+        return max(0.0, min(1.0, value))
+
+
+class LLMEntitySpec(BaseModel):
+    source_sheet: str
+    key: str
+    name: str
+    key_field: str | None = None
+    confidence: float = 0.8
+    needs_review: bool = False
+    reason: str = ""
+    fields: list[LLMFieldSpec] = Field(default_factory=list)
+
+    @field_validator("confidence")
+    @classmethod
+    def _clamp(cls, value: float) -> float:
+        return max(0.0, min(1.0, value))
+
+
+class LLMLinkSpec(BaseModel):
+    from_entity: str
+    to_entity: str
+    on_from: str
+    on_to: str
+    confidence: float = 0.7
+    reason: str = ""
+
+    @field_validator("confidence")
+    @classmethod
+    def _clamp(cls, value: float) -> float:
+        return max(0.0, min(1.0, value))
+
+
+class LLMMetricSpec(BaseModel):
+    source_sheet: str
+    op: str
+    field: str | None = None
+    business_definition: str = ""
+    confidence: float = 0.7
+
+    @field_validator("confidence")
+    @classmethod
+    def _clamp(cls, value: float) -> float:
+        return max(0.0, min(1.0, value))
+
+
+class LLMUnderstanding(BaseModel):
+    entities: list[LLMEntitySpec] = Field(default_factory=list)
+    links: list[LLMLinkSpec] = Field(default_factory=list)
+    metrics: list[LLMMetricSpec] = Field(default_factory=list)
+
+
+def _clip(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if len(text) > MAX_CELL_LENGTH:
+        return text[:MAX_CELL_LENGTH] + "…"
+    return text
+
+
+def build_workbook_digest(result: ProfiledParsedWorkbook) -> dict[str, object]:
+    """Serialize workbook structure for the prompt (headers + sample rows)."""
+    sheets: list[dict[str, object]] = []
+    for sheet in result.sheets:
+        if sheet.is_empty:
+            continue
+        sample_rows: list[list[str | None]] = []
+        for row in sheet.rows[:MAX_SAMPLE_ROWS]:
+            sample_rows.append(
+                [_clip(row[pos] if pos < len(row) else None) for pos in range(len(sheet.columns))]
+            )
+        sheets.append(
+            {
+                "name": sheet.name,
+                "columns": list(sheet.columns),
+                "data_row_count": sheet.data_row_count,
+                "sample_rows": sample_rows,
+            }
+        )
+    return {"file_name": result.file_name, "sheets": sheets}
+
+
+def build_messages(result: ProfiledParsedWorkbook) -> list[dict[str, str]]:
+    import json
+
+    digest = json.dumps(build_workbook_digest(result), ensure_ascii=False, indent=2)
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": f"请理解以下工作簿并输出模型 JSON：\n\n{digest}",
+        },
+    ]
+
+
+def _normalize_entity_key(raw: str, used: set[str]) -> str:
+    """Force an arbitrary proposal into the assembler key namespace."""
+    key = raw.strip().lower()
+    key = re.sub(r"[^a-z0-9]+", "_", key).strip("_")
+    if not key or key[0].isdigit():
+        key = f"entity_{key}" if key else "entity"
+    base = key
+    suffix = 2
+    while key in used:
+        key = f"{base}_{suffix}"
+        suffix += 1
+    used.add(key)
+    return key
+
+
+def _is_enum_viable(spec: LLMFieldSpec) -> bool:
+    values = [value.strip() for value in spec.enum_values if value.strip()]
+    return bool(values) and len(set(values)) <= MAX_ENUM_VALUES
+
+
+def _column_value_stats(
+    sheet: ParsedSheet, column: str
+) -> tuple[float, float]:
+    """(non-null ratio, distinct-values ratio) of a column over real rows."""
+    total = len(sheet.rows)
+    if total == 0 or column not in sheet.columns:
+        return 0.0, 0.0
+    pos = sheet.columns.index(column)
+    values: list[str] = []
+    for row in sheet.rows:
+        value = row[pos] if pos < len(row) else None
+        if value is not None and value.strip():
+            values.append(value.strip())
+    nonnull_ratio = len(values) / total
+    distinct_ratio = len(set(values)) / len(values) if values else 0.0
+    return nonnull_ratio, distinct_ratio
+
+
+def _is_valid_key_column(sheet: ParsedSheet, column: str) -> bool:
+    """A column can serve as key when it is present on (almost) every row."""
+    nonnull_ratio, _distinct_ratio = _column_value_stats(sheet, column)
+    return nonnull_ratio >= KEY_MIN_NONNULL_RATIO
+
+
+def _merge_field(
+    column: str,
+    fallback: InferredField,
+    spec: LLMFieldSpec | None,
+) -> InferredField:
+    if spec is None:
+        # Model omitted this column — keep deterministic inference, tagged so
+        # the UI can still tell LLM vs rule provenance.
+        fallback.signals = [*fallback.signals, "llm:column_fallback"]
+        return fallback
+
+    ftype = spec.type if spec.type in FIELD_TYPES else fallback.type
+    role = spec.role if spec.role in FIELD_ROLES else fallback.role
+    if ftype == "enum" and not _is_enum_viable(spec):
+        # Same defensive downgrade the assembler applies: enum without a
+        # bounded value set is invalid; keep it as plain string.
+        ftype = "string"
+        if role == "enum":
+            role = "dimension"
+    enum_values = list(dict.fromkeys(spec.enum_values))[:MAX_ENUM_VALUES]
+    confidence = spec.confidence
+    needs_review = spec.needs_review or confidence < CONFIDENCE_HIGH
+    signals = ["llm"]
+    if spec.reason:
+        signals.append(f"llm_reason:{spec.reason[:80]}")
+    return InferredField(
+        column=column,
+        type=ftype,  # type: ignore[arg-type]
+        confidence=confidence,
+        needs_review=needs_review,
+        signals=signals,
+        enum_values=enum_values if ftype == "enum" else [],
+        role=role,  # type: ignore[arg-type]
+        role_confidence=confidence,
+        role_needs_review=needs_review,
+        role_signals=["llm"],
+    )
+
+
+def apply_llm_understanding(
+    result: ProfiledParsedWorkbook,
+    client: ChatClient,
+) -> tuple[Literal["llm", "rules"], list[str]]:
+    """Call the LLM and merge its proposal into the profiled workbook.
+
+    Returns the engine actually used and human-readable notes. On any LLM or
+    validation failure the caller keeps the deterministic results untouched.
+    """
+    notes: list[str] = []
+    try:
+        payload = client.complete_json(build_messages(result))
+        proposal = LLMUnderstanding.model_validate(payload)
+    except (LLMError, ValidationError) as exc:
+        logger.warning("LLM 理解失败，自动降级为规则引擎：%s", exc)
+        notes.append(f"LLM 理解失败，已使用规则引擎结果：{exc}")
+        return "rules", notes
+
+    sheets_by_name = {sheet.name.strip(): sheet for sheet in result.sheets}
+    used_keys: set[str] = set()
+    # Proposed links reference source entity keys; remember sheet -> final key.
+    sheet_to_entity_key: dict[str, str] = {}
+    matched_sheets: set[str] = set()
+
+    for entity_spec in proposal.entities:
+        sheet_name = entity_spec.source_sheet.strip()
+        sheet = sheets_by_name.get(sheet_name)
+        if sheet is None:
+            notes.append(
+                f"LLM 提出的实体「{entity_spec.name}」找不到工作表"
+                f"「{sheet_name}」，已忽略"
+            )
+            continue
+        matched_sheets.add(sheet.name)
+
+        final_key = _normalize_entity_key(entity_spec.key, used_keys)
+        sheet_to_entity_key[sheet.name] = final_key
+
+        specs_by_column = {
+            spec.column.strip(): spec for spec in entity_spec.fields if spec.column.strip()
+        }
+        merged_fields = [
+            _merge_field(column, fallback, specs_by_column.get(column.strip()))
+            for column, fallback in zip(
+                sheet.columns, sheet.inferred_fields, strict=False
+            )
+        ]
+
+        # Resolve the business key against REAL values, not the model's word:
+        # explicit key_field, then the identifier-marked column, then any
+        # column that is present and unique on (nearly) every row. A key with
+        # blanks/duplicates fails Confirm key validation later, so reject it
+        # here rather than producing an un-generatable entity.
+        proposed_key = (
+            entity_spec.key_field.strip() if entity_spec.key_field else None
+        )
+        if proposed_key is not None and proposed_key not in sheet.columns:
+            notes.append(
+                f"实体「{entity_spec.name}」的主键列「{proposed_key}」不存在，"
+                "已尝试改用其他列"
+            )
+            proposed_key = None
+
+        candidate_columns: list[str] = []
+        if proposed_key is not None:
+            candidate_columns.append(proposed_key)
+        for spec in entity_spec.fields:
+            column = spec.column.strip()
+            if spec.role == "identifier" and column in sheet.columns:
+                candidate_columns.append(column)
+        candidate_columns.extend(sheet.columns)
+
+        key_field: str | None = None
+        for candidate in dict.fromkeys(candidate_columns):
+            if _is_valid_key_column(sheet, candidate):
+                key_field = candidate
+                break
+
+        if (
+            key_field is not None
+            and proposed_key is not None
+            and key_field != proposed_key
+        ):
+            notes.append(
+                f"实体「{entity_spec.name}」提议的主键列「{proposed_key}」在实际"
+                f"数据中存在空值或重复，已改用「{key_field}」作为主键"
+            )
+        key_has_duplicates = False
+        if key_field is not None:
+            _nonnull, distinct_ratio = _column_value_stats(sheet, key_field)
+            if distinct_ratio < KEY_REVIEW_DISTINCT_RATIO:
+                key_has_duplicates = True
+                notes.append(
+                    f"实体「{entity_spec.name}」的主键列「{key_field}」存在重复值，"
+                    "生成后重复行的详情会相互覆盖，请人工确认主键选择"
+                )
+        if key_field is None:
+            notes.append(
+                f"实体「{entity_spec.name}」找不到每行都非空的主键列"
+                "（可能存在合并单元格空行），该工作表未纳入模型"
+            )
+
+        # Align the key field's role to identifier in the merged fields.
+        if key_field is not None:
+            key_pos = sheet.columns.index(key_field)
+            key_field_model = merged_fields[key_pos]
+            if key_field_model.role != "identifier":
+                key_field_model.role = "identifier"  # type: ignore[assignment]
+                key_field_model.role_signals = ["llm:promoted_from_key_field"]
+            if key_has_duplicates:
+                key_field_model.needs_review = True
+                key_field_model.role_needs_review = True
+
+        needs_review = (
+            entity_spec.needs_review
+            or entity_spec.confidence < CONFIDENCE_HIGH
+            or key_field is None
+            or key_has_duplicates
+        )
+        signals = ["llm"]
+        if entity_spec.reason:
+            signals.append(f"llm_reason:{entity_spec.reason[:80]}")
+        if key_field is None:
+            signals.append("no_identifier")
+
+        sheet.inferred_fields = merged_fields
+        sheet.inferred_entity = InferredEntity(
+            source_sheet=sheet.name,
+            key=final_key,
+            name=entity_spec.name.strip() or sheet.name,
+            key_field=key_field,
+            confidence=entity_spec.confidence,
+            needs_review=needs_review,
+            signals=signals,
+        )
+
+    for sheet in result.sheets:
+        if not sheet.is_empty and sheet.name not in matched_sheets:
+            notes.append(f"工作表「{sheet.name}」未被 LLM 识别为实体，保留规则引擎结果")
+
+    # Metric definitions can be validated immediately (sheet + column exist);
+    # they ride on the serialized result so Confirm re-assembly reuses them.
+    definitions, metric_notes = build_metric_definitions(
+        proposal.metrics, sheets_by_name, matched_sheets
+    )
+    result.metric_definitions = definitions
+    notes.extend(metric_notes)
+
+    # Stash link specs (raw dicts; schemas must stay LLM-package agnostic) for
+    # the post-plan stage where columns can be mapped to field keys.
+    result.llm_link_specs = [spec.model_dump() for spec in proposal.links]
+    result.understanding_engine = "llm"
+    return "llm", notes
+
+
+def build_metric_definitions(
+    specs: list[LLMMetricSpec],
+    sheets_by_name: dict[str, ProfiledParsedSheet],
+    matched_sheets: set[str],
+) -> tuple[list[InferredMetricDefinition], list[str]]:
+    """Validate LLM metric definitions against the real workbook.
+
+    Only the definition text is accepted here: metric selection remains
+    deterministic, so an op the assembler never builds or a column that does
+    not exist is dropped. Duplicate (sheet, op, column) proposals keep the
+    first.
+    """
+    notes: list[str] = []
+    seen: set[tuple[str, str, str | None]] = set()
+    definitions: list[InferredMetricDefinition] = []
+    for spec in specs:
+        sheet_name = spec.source_sheet.strip()
+        sheet = sheets_by_name.get(sheet_name)
+        if sheet is None or sheet.name not in matched_sheets:
+            notes.append(
+                f"LLM 指标口径找不到已识别的工作表「{sheet_name}」，已忽略"
+            )
+            continue
+        op = spec.op.strip().lower()
+        if op not in METRIC_OPS:
+            notes.append(f"工作表「{sheet_name}」的指标算子「{spec.op}」不在 V0.1 范围，已忽略")
+            continue
+        column = spec.field.strip() if spec.field else None
+        if op == "count":
+            column = None
+        elif not column or column not in sheet.columns:
+            notes.append(
+                f"工作表「{sheet_name}」的合计指标列"
+                f"「{column or '(空)'}」不存在，已忽略该口径"
+            )
+            continue
+        definition = spec.business_definition.strip()
+        if not definition:
+            notes.append(f"工作表「{sheet_name}」的 {op} 指标缺少业务口径，已忽略")
+            continue
+        if _claims_unsupported_dedup(definition):
+            notes.append(
+                f"工作表「{sheet_name}」的 {op} 指标口径声称去重/唯一计数，"
+                "V0.1 指标不做去重，该口径已忽略并回退为系统模板"
+            )
+            continue
+        if len(definition) > MAX_METRIC_DEFINITION_LENGTH:
+            definition = definition[:MAX_METRIC_DEFINITION_LENGTH] + "…"
+        identity = (sheet.name, op, column)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        definitions.append(
+            InferredMetricDefinition(
+                source_sheet=sheet.name,
+                op=op,  # type: ignore[arg-type]
+                field=column,
+                business_definition=definition,
+                confidence=spec.confidence,
+            )
+        )
+    return definitions, notes
+
+
+def build_llm_links(
+    specs: list[LLMLinkSpec],
+    plans: list[EntityPlan],
+) -> tuple[list[InferredLink], list[str]]:
+    """Validate LLM link proposals against assembled plans and real data."""
+    notes: list[str] = []
+    plans_by_key = {plan.key: plan for plan in plans}
+    links: list[InferredLink] = []
+
+    for spec in specs:
+        from_key = spec.from_entity.strip()
+        to_key = spec.to_entity.strip()
+        # Tolerate proposals that used a sheet name or a pre-normalization key.
+        if from_key not in plans_by_key:
+            for plan in plans:
+                if plan.sheet.name.strip() == from_key:
+                    from_key = plan.key
+                    break
+        if to_key not in plans_by_key:
+            for plan in plans:
+                if plan.sheet.name.strip() == to_key:
+                    to_key = plan.key
+                    break
+        parent = plans_by_key.get(from_key)
+        child = plans_by_key.get(to_key)
+        if parent is None or child is None or parent.key == child.key:
+            notes.append(f"LLM 关联「{spec.from_entity}→{spec.to_entity}」实体无法对应，已忽略")
+            continue
+        if spec.on_from.strip() not in parent.sheet.columns:
+            notes.append(f"LLM 关联的主表列「{spec.on_from}」不存在，已忽略该关联")
+            continue
+        if spec.on_to.strip() not in child.sheet.columns:
+            notes.append(f"LLM 关联的子表列「{spec.on_to}」不存在，已忽略该关联")
+            continue
+        on_from_column = spec.on_from.strip()
+        on_to_column = spec.on_to.strip()
+        if on_to_column == child.key_field_column:
+            notes.append("LLM 关联使用了子表自身主键作为外键，已忽略")
+            continue
+
+        field_keys = unique_field_keys(child.sheet.columns)[0]
+        on_to_field = dict(zip(child.sheet.columns, field_keys, strict=True))[
+            on_to_column
+        ]
+
+        # Objective evidence from the actual values, same as rule inference.
+        def values_of(plan: EntityPlan, column: str) -> list[str]:
+            pos = plan.sheet.columns.index(column)
+            out: list[str] = []
+            for row in plan.sheet.rows:
+                if pos >= len(row):
+                    continue
+                value = row[pos]
+                if value is not None and value.strip():
+                    out.append(value.strip())
+            return out
+
+        parent_values = values_of(parent, on_from_column)
+        child_values = values_of(child, on_to_column)
+        parent_set, child_set = set(parent_values), set(child_values)
+        overlap = parent_set & child_set
+        recall = len(overlap) / len(parent_set) if parent_set else 0.0
+        precision = len(overlap) / len(child_set) if child_set else 0.0
+
+        # LLM links are still spreadsheet guesses: always review-gated, and
+        # unverified overlaps cannot be presented as high confidence.
+        confidence = min(spec.confidence, 0.8 if overlap else 0.6)
+        signals = ["llm"]
+        if overlap:
+            signals.append("value_set_overlap")
+        else:
+            signals.append("value_set_not_verified")
+        links.append(
+            InferredLink(
+                key=f"{parent.key}_to_{child.key}",
+                from_entity=parent.key,
+                to_entity=child.key,
+                on_from=parent.key_field_key,
+                on_to=on_to_field,
+                confidence=confidence,
+                needs_review=True,
+                review_reason=(
+                    "LLM 推断的关联，源数据没有外键定义，需人工确认"
+                    + ("" if overlap else "（值集合未验证）")
+                ),
+                signals=signals,
+                overlap_recall=round(recall, 4),
+                overlap_precision=round(precision, 4),
+            )
+        )
+    return links, notes

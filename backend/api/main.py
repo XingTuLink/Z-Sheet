@@ -12,8 +12,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from backend.api.routes import health, ingestion, models, runtime
+from backend.ai.provider import mask_key
+from backend.api.routes import (
+    health,
+    ingestion,
+    models,
+    patch,
+    publications,
+    runtime,
+)
 from backend.config import PROJECT_VERSION, get_settings
+from backend.logging_config import configure_logging, get_logger
+
+logger = get_logger(__name__)
 
 
 class SPASinglePageFiles(StaticFiles):
@@ -46,7 +57,21 @@ def _find_spa_dist() -> Path | None:
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    configure_logging(settings.log_level)
     app = FastAPI(title="Z-Sheet API", version=PROJECT_VERSION)
+
+    llm = settings.llm_config
+    logger.info(
+        "Z-Sheet %s 启动；LLM endpoint=%s model=%s timeout=%.0fs retries=%d "
+        "部署=%s key=%s",
+        PROJECT_VERSION,
+        llm.endpoint,
+        llm.model or "(未配置)",
+        llm.timeout,
+        llm.max_retries,
+        "本地" if llm.is_local else "公有云",
+        mask_key(llm.api_key),
+    )
 
     app.add_middleware(
         CORSMiddleware,
@@ -60,6 +85,9 @@ def create_app() -> FastAPI:
     app.include_router(models.router)
     app.include_router(runtime.router)
     app.include_router(ingestion.router)
+    app.include_router(patch.router)
+    app.include_router(publications.management_router)
+    app.include_router(publications.public_router)
 
     # Production-style single-container delivery: serve the built SPA from the
     # backend. Absent during `vite dev`, where the Vite proxy owns the UI.

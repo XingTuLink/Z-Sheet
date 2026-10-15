@@ -58,3 +58,75 @@ class AppDataRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )
+
+
+class PatchSessionRecord(Base):
+    """Server-side NL patch preview awaiting the user's decision (Day 25).
+
+    Preview stores the parsed intents plus the fully generated (and dry-run
+    validated) patch ops here under a random token. Confirm/reject reads the
+    cached ops back: the client only submits the token and its decision, so it
+    cannot tamper with the patch. ``base_version`` pins the model the preview
+    was generated against; confirm refuses if the app moved on meanwhile.
+    """
+
+    __tablename__ = "patch_sessions"
+
+    session_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    app_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    base_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+
+class AppPublicationRecord(Base):
+    """Public link state for one app (Day 33 publish feature).
+
+    Exactly one row per app. Publishing pins ``model_version``: visitors of
+    the slug keep seeing that model while the owner keeps editing; records
+    stay live. Changing ``slug`` immediately invalidates the old URL; setting
+    ``status`` to unpublished takes the link down (the row, and hence slug
+    ownership, is retained so nobody can squat a previously used slug).
+    ``creator_id`` is reserved NULL for the future users / approval system.
+    """
+
+    __tablename__ = "app_publications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    app_key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    slug: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    model_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="published")
+    creator_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+
+class UnderstandingSessionRecord(Base):
+    """Server-side understanding result keyed by uploaded file hash (Day 22).
+
+    Parse stores the (possibly LLM-produced) ProfiledParsedWorkbook here;
+    Confirm reads it back instead of re-inferring. The client therefore cannot
+    influence the confirmed model — it only submits accept/reject decisions —
+    and a second, non-deterministic LLM call cannot disagree with what the
+    user reviewed.
+    """
+
+    __tablename__ = "understanding_sessions"
+
+    content_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    engine: Mapped[str] = mapped_column(String(16), nullable=False, default="rules")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )

@@ -25,12 +25,16 @@ from sqlalchemy.orm import Session
 from backend.api.schemas import ConfirmResponse
 from backend.ingestion.parser import MAX_UPLOAD_BYTES, ParseError, parse_workbook
 from backend.ingestion.template import TEMPLATE_FILENAME, build_template_workbook
-from backend.storage.db import get_db
+from backend.logging_config import get_logger
+from backend.storage.db import SessionLocal, get_db
+from backend.storage.repositories import understanding_repository
 from backend.understanding import confirmation
 from backend.understanding.profiling import STAGE_SHEETS, add_profiles
 from backend.understanding.schemas import ProfiledParsedWorkbook
 
 router = APIRouter(prefix="/api/v1/ingestion", tags=["ingestion"])
+
+logger = get_logger("ingestion")
 
 # Thread -> generator hand-off items. The understanding pipeline is a
 # synchronous CPU-bound call, so it runs on a worker thread while this
@@ -65,6 +69,7 @@ def download_template() -> Response:
 @router.post("/parse", response_model=ProfiledParsedWorkbook)
 async def parse_file(
     file: UploadFile = File(...),
+    db: Session = Depends(get_db),
 ) -> ProfiledParsedWorkbook | JSONResponse:
     # Read one byte past the limit to detect oversize uploads deterministically.
     content = await file.read(MAX_UPLOAD_BYTES + 1)
@@ -75,12 +80,19 @@ async def parse_file(
         )
     try:
         workbook = parse_workbook(file.filename or "upload", content)
-        return add_profiles(workbook)
+        result = add_profiles(workbook)
     except ParseError as exc:
+        logger.info("解析失败（%s）：%s", file.filename, exc)
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content={"detail": str(exc)},
         )
+    # Cache the reviewed understanding server-side so Confirm consumes exactly
+    # this result (a second, non-deterministic LLM call could disagree).
+    understanding_repository.save_understanding(
+        db, understanding_repository.session_key(content), result
+    )
+    return result
 
 
 @router.post("/parse/stream", response_model=None)
@@ -105,6 +117,7 @@ async def parse_file_stream(
         try:
             workbook = parse_workbook(file.filename or "upload", content)
         except ParseError as exc:
+            logger.info("解析失败（%s）：%s", file.filename, exc)
             yield _sse("error", json.dumps({"detail": str(exc)}, ensure_ascii=False))
             return
 
@@ -121,10 +134,36 @@ async def parse_file_stream(
                         )
                     ),
                 )
+                # Persist with a worker-owned session (request session is bound
+                # to the event-loop thread); cache failure just means Confirm
+                # re-runs inference, it never invalidates this parse result.
+                try:
+                    session_db = SessionLocal()
+                    try:
+                        understanding_repository.save_understanding(
+                            session_db,
+                            understanding_repository.session_key(content),
+                            result,
+                        )
+                    finally:
+                        session_db.close()
+                except Exception:
+                    # Non-fatal: Confirm re-runs inference when the cache is
+                    # missing, but a persistently failing cache must be visible
+                    # in the logs or nobody notices Confirm got slower.
+                    logger.warning(
+                        "理解结果缓存写入失败，Confirm 将回退为重新推理",
+                        exc_info=True,
+                    )
                 events.put(("result", result.model_dump_json()))
-            except Exception as exc:  # surface pipeline failures as SSE errors
+            except Exception:
+                # surface pipeline failures as SSE errors
+                logger.exception("理解流水线在 SSE worker 中失败")
                 events.put(
-                    ("error", json.dumps({"detail": str(exc)}, ensure_ascii=False))
+                    ("error", json.dumps(
+                        {"detail": "理解流水线执行失败，请稍后重试"},
+                        ensure_ascii=False,
+                    ))
                 )
 
         thread = threading.Thread(target=worker, daemon=True)

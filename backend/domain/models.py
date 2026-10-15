@@ -149,11 +149,21 @@ class MetricFormula(StrictModel):
         return self
 
 
-class Metric(StrictModel):
+class Metric(ConfidenceMixin, StrictModel):
+    # Metrics predate metric confidence in frozen snapshots (schema 0.1 apps
+    # assembled before AI definitions). Give legacy metrics a structural
+    # default instead of rejecting them when old app versions boot: metric
+    # *selection* is deterministic, and the review gate only runs at Confirm.
+    # The assembler always passes an explicit confidence for new models.
+    confidence: float = Field(default=0.9, ge=0.0, le=1.0)
+
     key: str
     name: str = Field(min_length=1)
     entity: str
     formula: MetricFormula
+    # Design 7.2 principle B: the business definition is a first-class field,
+    # not a label. AI-proposed definitions carry a confidence and enter the
+    # review queue at the medium/low tiers like every other inference.
     business_definition: str = Field(min_length=1)
 
     @model_validator(mode="after")

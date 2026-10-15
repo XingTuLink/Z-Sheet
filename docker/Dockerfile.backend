@@ -57,4 +57,10 @@ RUN sed -i 's/\r$//' ./docker/entrypoint.sh && chmod +x ./docker/entrypoint.sh
 USER app
 EXPOSE 8000
 
+# Readiness probe against the DB-aware health endpoint (slim image has no
+# curl, so use the venv's stdlib Python). Migrations run during startup,
+# hence the grace period.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD python -c "import json,urllib.request,sys; r=json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)); sys.exit(0 if r.get('status') == 'ok' else 1)"
+
 ENTRYPOINT ["./docker/entrypoint.sh"]

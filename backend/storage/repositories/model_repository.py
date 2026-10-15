@@ -20,8 +20,8 @@ from sqlalchemy.orm import Session
 
 from backend.domain.models import BusinessModel
 from backend.domain.serialization import model_from_yaml
-from backend.patch.apply import PatchError, apply_patch
-from backend.patch.json_patch import PatchDocument
+from backend.patch.apply import PatchError
+from backend.patch.validation import validate_patch_snapshot
 from backend.storage.models import ModelVersionRecord
 
 APP_KEY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
@@ -37,6 +37,10 @@ class AppExistsError(Exception):
     def __init__(self, app_key: str) -> None:
         super().__init__(f"app already exists: {app_key}")
         self.app_key = app_key
+
+
+class VersionConflictError(Exception):
+    """Rollback/undo points at a version that cannot be restored to."""
 
 
 def validate_app_key(app_key: str) -> str:
@@ -186,20 +190,59 @@ def apply_patch_as_new_version(
     validate_app_key(app_key)
     current = get_current(db, app_key)
 
-    # Layer 1: patch shape (RFC 6902 subset).
-    document = PatchDocument.from_raw(raw_ops)
-    # Layer 2: structural application against the current snapshot.
-    new_snapshot = apply_patch(current.snapshot, document.ops)
-    # Layer 3: full Business Model semantics (raises ValidationError on failure).
-    model = BusinessModel.model_validate(new_snapshot)
+    new_snapshot = validate_patch_snapshot(current.snapshot, raw_ops)
 
     record = ModelVersionRecord(
         app_key=app_key,
         version=current.version + 1,
-        snapshot=model.model_dump(mode="json"),
+        snapshot=new_snapshot,
         patch=raw_ops,
         operator=operator,
         source_request=source_request,
+        validation_status="passed",
+    )
+    try:
+        db.add(record)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    db.refresh(record)
+    return record
+
+
+def restore_version(
+    db: Session,
+    app_key: str,
+    target_version: int,
+    *,
+    operator: str = "local",
+) -> ModelVersionRecord:
+    """Rollback: append a new version that copies a historical snapshot.
+
+    History is append-only — the target row and every intermediate version
+    stay in place. The restored row carries no patch (snapshot restore, not
+    an RFC 6902 change); ``source_request`` records where it came from.
+    """
+    validate_app_key(app_key)
+    current = get_current(db, app_key)
+    if target_version == current.version:
+        raise VersionConflictError(
+            f"version {target_version} is already the current version"
+        )
+    target = get_version(db, app_key, target_version)
+
+    # Re-validate defensively: historical rows were legal when written, but
+    # going through BusinessModel also normalizes the restored snapshot.
+    restored = snapshot_to_model(target).model_dump(mode="json")
+
+    record = ModelVersionRecord(
+        app_key=app_key,
+        version=current.version + 1,
+        snapshot=restored,
+        patch=None,
+        operator=operator,
+        source_request=f"回滚到版本 {target_version}",
         validation_status="passed",
     )
     try:
@@ -216,11 +259,13 @@ __all__ = [
     "AppExistsError",
     "AppNotFoundError",
     "PatchError",
+    "VersionConflictError",
     "apply_patch_as_new_version",
     "get_current",
     "get_version",
     "import_model",
     "list_versions",
+    "restore_version",
     "snapshot_to_model",
     "upsert_model",
     "validate_app_key",

@@ -1,0 +1,47 @@
+name: 功能请求
+description: 建议新能力或改进现有能力（提交前请先看 ROADMAP.md 中的 V0.1 禁区）
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交前请先阅读 [ROADMAP.md](https://atomgit.com/XingTuLink/Z-Sheet/blob/main/ROADMAP.md)：
+        数据库直连、权限体系、工作流/审批/通知、移动端、拖拽低代码、复杂 BI、Agent、
+        插件生态、Excel 双向同步、多对多关系属于 V0.1 明确禁区，仍欢迎记录，
+        但会排到对应大版本统一评估。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你想解决的业务场景
+      description: 你在用 Z-Sheet 处理什么表格/业务时遇到了什么不便？
+      placeholder: 例如：我用库存表生成了系统，但每次盘点后想批量修改多条记录，只能逐条编辑。
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 期望的方案
+      description: 你希望它怎样工作？
+      placeholder: 例如：列表页勾选多行后可以批量修改同一个枚举字段。
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 考虑过的替代方式
+      description: 目前你是怎么绕过去的？
+
+  - type: dropdown
+    id: willingness
+    attributes:
+      label: 是否愿意参与验证 / 贡献
+      options:
+        - 愿意提供真实表格样例协助验证
+        - 愿意尝试 PR（已阅读 CONTRIBUTING.md）
+        - 仅提需求
+    validations:
+      required: true

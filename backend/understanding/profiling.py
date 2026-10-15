@@ -121,21 +121,41 @@ def profile_sheet(sheet: ParsedSheet, sample_size: int = DEFAULT_SAMPLE_SIZE) ->
     )
 
 
+# Sentinel: build the LLM client from application settings (Day 21). Explicitly
+# passing a ChatClient injects one (tests/local engines); passing None forces
+# the deterministic engine.
+_USE_SETTINGS_LLM = object()
+
+
 def add_profiles(
     workbook: ParsedWorkbook,
     sample_size: int = DEFAULT_SAMPLE_SIZE,
     on_stage: StageCallback | None = None,
+    *,
+    llm_client: object | None = _USE_SETTINGS_LLM,
 ) -> ProfiledParsedWorkbook:
     """Run the full understanding pipeline and assemble a Business Model.
 
     When ``on_stage`` is given it receives real progress events
     (fields/entities/relations/assemble with the count produced at that
     stage), backing the Parsing Progress UI instead of a fake spinner.
+
+    The LLM understanding layer runs by default when configured
+    (``ZSHEET_LLM_*``); its proposal replaces entity/field inference while
+    deterministic results remain the fallback. Pass ``llm_client=None`` to
+    force the rules engine.
     """
+    from backend.ai.provider import ChatClient
+    from backend.config import get_settings
     from backend.domain.serialization import model_to_dict, model_to_yaml
 
     from .entity_inference import infer_entity
     from .link_inference import infer_links
+    from .llm_understanding import (
+        LLMLinkSpec,
+        apply_llm_understanding,
+        build_llm_links,
+    )
     from .model_assembly import assemble_model, build_entity_plans
     from .role_inference import annotate_roles
     from .type_inference import infer_sheet
@@ -170,11 +190,53 @@ def add_profiles(
         sheets=enriched,
     )
 
+    # LLM understanding (Day 21): overrides entities/fields before assembly;
+    # any failure leaves the deterministic results intact.
+    llm_notes: list[str] = []
+    client: object | None
+    if llm_client is _USE_SETTINGS_LLM:
+        config = get_settings().llm_config
+        client = ChatClient(config) if config.available else None
+        if client is None:
+            llm_notes.append("未配置可用的 LLM（ZSHEET_LLM_API_KEY），使用规则引擎理解")
+    else:
+        client = llm_client
+    if isinstance(client, ChatClient):
+        _engine, llm_notes = apply_llm_understanding(result, client)
+    result.understanding_notes = llm_notes
+
+    # Provenance/infra notes ("no LLM configured", "call failed, fell back")
+    # explain which engine ran; they are not assembly drops and must not enter
+    # assembly_notes, whose contract is "what was excluded from the model".
+    infra_prefixes = ("未配置可用的 LLM", "LLM 理解失败")
+    llm_structural_notes = [
+        note
+        for note in llm_notes
+        if not note.startswith(infra_prefixes)
+    ]
+
     # Workbook-level stage: entity plans -> links -> validated Business Model.
     plans, notes = build_entity_plans(result)
-    result.assembly_notes = notes
+    result.assembly_notes = [*llm_structural_notes, *notes]
     _emit(STAGE_ENTITIES, len(plans))
-    result.inferred_links = infer_links(result, plans)
+
+    rule_links = infer_links(result, plans)
+    all_links = list(rule_links)
+    if result.llm_link_specs and plans:
+        specs = [LLMLinkSpec.model_validate(raw) for raw in result.llm_link_specs]
+        llm_links, link_notes = build_llm_links(specs, plans)
+        result.assembly_notes.extend(link_notes)
+        # Rule inference already gives data-verified links; LLM proposals only
+        # add pairs the deterministic scorer did not cover.
+        covered = {
+            (link.from_entity, link.to_entity, link.on_to) for link in all_links
+        }
+        all_links.extend(
+            link
+            for link in llm_links
+            if (link.from_entity, link.to_entity, link.on_to) not in covered
+        )
+    result.inferred_links = all_links
     _emit(STAGE_RELATIONS, len(result.inferred_links))
     _emit(STAGE_ASSEMBLE, 0)
     model = assemble_model(result, plans, result.inferred_links)

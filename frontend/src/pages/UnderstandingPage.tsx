@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
@@ -14,10 +15,13 @@ import {
   type ReviewDecision,
   type ReviewState,
   type UnderstandingEntity,
+  type UnderstandingMetric,
   type UnderstandingResult,
   type UnderstandingSheet,
 } from '../api/ingestion'
+import { WORKSPACE_APP_KEY } from '../api/runtime'
 import { getLastUploadedFile } from '../api/sessionStore'
+import { BrandLockup, CompanyByline } from '../components/Brand'
 
 const TYPE_LABELS: Record<FieldType, string> = {
   string: '文本',
@@ -73,6 +77,27 @@ function fieldAckId(entityKey: string, fieldKey: string) {
   return `${entityKey}.${fieldKey}`
 }
 
+// Metric keys live in their own namespace on the backend; keep the prefix so
+// a metric id can never collide with an entity/field id.
+function metricAckId(metricKey: string) {
+  return `metric:${metricKey}`
+}
+
+const METRIC_OP_LABELS: Record<string, string> = {
+  count: '总数',
+  sum: '合计',
+  avg: '平均',
+  min: '最小',
+  max: '最大',
+}
+
+function metricReason(metric: UnderstandingMetric): string {
+  const definition = `指标口径：${metric.business_definition}`
+  return metric.review_reason
+    ? `${metric.review_reason}　${definition}`
+    : definition
+}
+
 interface ReviewQueueProps {
   result: UnderstandingResult
   entityConfidence: Map<string, { confidence: number; needs_review: boolean }>
@@ -93,7 +118,7 @@ function ReviewQueue({
     entities.find((entity) => entity.key === key)?.name ?? key
 
   interface AckItem {
-    kind: 'entity' | 'field'
+    kind: 'entity' | 'field' | 'metric'
     id: string
     location: string
     label: string
@@ -125,6 +150,18 @@ function ReviewQueue({
           reason: field.review_reason ?? '推断证据不足，建议人工确认',
         })
       }
+    }
+  }
+  for (const metric of result.business_model?.metrics ?? []) {
+    if (metric.needs_review) {
+      ackItems.push({
+        kind: 'metric',
+        id: metricAckId(metric.key),
+        location: `${entityName(metric.entity)} · 指标`,
+        label: metric.name,
+        confidence: metric.confidence,
+        reason: metricReason(metric),
+      })
     }
   }
 
@@ -363,6 +400,91 @@ function EntityCard({
   )
 }
 
+function MetricsSection({
+  result,
+  review,
+  onAcknowledge,
+}: {
+  result: UnderstandingResult
+  review: ReviewState
+  onAcknowledge: (id: string) => void
+}) {
+  const metrics = result.business_model?.metrics ?? []
+  if (metrics.length === 0) return null
+  const entities = result.business_model?.entities ?? []
+  const entityName = (key: string) =>
+    entities.find((entity) => entity.key === key)?.name ?? key
+
+  return (
+    <section className="understanding-section">
+      <h2 className="section-title">
+        首页关键指标
+        <span className="muted block-count">{metrics.length} 个</span>
+      </h2>
+      <div className="card metric-def-card">
+        <ul className="metric-def-list">
+          {metrics.map((metric) => {
+            const ackId = metricAckId(metric.key)
+            const acked = Boolean(review.acknowledged[ackId])
+            return (
+              <li
+                key={metric.key}
+                className={`metric-def-item${metric.needs_review ? ' is-review' : ''}`}
+              >
+                <div className="metric-def-main">
+                  <div className="metric-def-head">
+                    <span className="metric-def-name">{metric.name}</span>
+                    <span className="tag tag-kind">
+                      {entityName(metric.entity)} ·{' '}
+                      {METRIC_OP_LABELS[metric.formula.op] ?? metric.formula.op}
+                    </span>
+                    <ConfidenceBadge confidence={metric.confidence} />
+                    {metric.needs_review &&
+                      (acked ? (
+                        <span className="tag tag-acked">已确认</span>
+                      ) : (
+                        <span className="tag tag-pending">口径待确认</span>
+                      ))}
+                  </div>
+                  <p className="metric-definition">
+                    <span className="metric-definition-label">业务口径</span>
+                    {metric.business_definition}
+                  </p>
+                  {metric.needs_review && metric.review_reason && (
+                    <p className="field-review-reason">{metric.review_reason}</p>
+                  )}
+                </div>
+                {metric.needs_review && (
+                  <div className="metric-def-actions">
+                    {acked ? (
+                      <button
+                        type="button"
+                        className="btn btn-mini"
+                        onClick={() => onAcknowledge(ackId)}
+                        aria-pressed="true"
+                      >
+                        撤销确认
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn btn-mini btn-primary"
+                        onClick={() => onAcknowledge(ackId)}
+                      >
+                        口径无误
+                      </button>
+                    )}
+                  </div>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      </div>
+    </section>
+  )
+}
+
 function RelationSection({ result, review }: { result: UnderstandingResult; review: ReviewState }) {
   const entities = result.business_model?.entities ?? []
   const entityName = (key: string) =>
@@ -451,8 +573,35 @@ function DroppedSheetsSection({
   )
 }
 
+function SheetWarningsSection({ result }: { result: UnderstandingResult }) {
+  const entries = result.sheets.flatMap((sheet) =>
+    (sheet.warnings ?? []).map((warning) => ({ sheet: sheet.name, warning })),
+  )
+  if (entries.length === 0) return null
+
+  return (
+    <section className="card understanding-block">
+      <h2 className="block-title">
+        解析时自动跳过的内容
+        <span className="muted block-count">
+          这些行/列未计入数据，不影响生成；如属真实数据请回表格调整
+        </span>
+      </h2>
+      <ul className="queue-list">
+        {entries.map(({ sheet, warning }) => (
+          <li key={`${sheet}:${warning}`} className="queue-reason">
+            <span className="muted">工作表「{sheet}」：</span>
+            {warning}
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
 export function UnderstandingPage() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const result = useMemo(() => loadUnderstandingResult(), [])
   const [review, setReview] = useState<ReviewState>(() => loadReviewState())
   const [confirming, setConfirming] = useState(false)
@@ -465,7 +614,9 @@ export function UnderstandingPage() {
     return (
       <main className="gate">
         <div className="card gate-card">
-          <h1 className="gate-brand">Z-Sheet</h1>
+          <h1 className="gate-brand">
+            <BrandLockup logoSize={34} />
+          </h1>
           <p>还没有可浏览的理解结果。</p>
           <p className="muted">
             请先上传一个 Excel 或 CSV 文件；如果表格未能识别出业务实体，可下载标准模板参照整理。
@@ -478,6 +629,7 @@ export function UnderstandingPage() {
               下载标准模板
             </a>
           </p>
+          <CompanyByline />
         </div>
       </main>
     )
@@ -522,6 +674,10 @@ export function UnderstandingPage() {
         ).length,
       0,
     ) +
+    (result.business_model?.metrics ?? []).filter(
+      (metric) =>
+        metric.needs_review && !review.acknowledged[metricAckId(metric.key)],
+    ).length +
     result.inferred_links.filter((link) => !review.links[link.key]?.decision).length
 
   const updateReview = (next: ReviewState) => {
@@ -559,14 +715,51 @@ export function UnderstandingPage() {
     })
   }
 
+  const acceptAllPending = () => {
+    const acknowledged = { ...review.acknowledged }
+    for (const entity of entities) {
+      if (entityConfidence.get(entity.key)?.needs_review) {
+        acknowledged[entity.key] = true
+      }
+      for (const field of entity.fields) {
+        if (field.needs_review) {
+          acknowledged[fieldAckId(entity.key, field.key)] = true
+        }
+      }
+    }
+    for (const metric of result.business_model?.metrics ?? []) {
+      if (metric.needs_review) acknowledged[metricAckId(metric.key)] = true
+    }
+    const links = { ...review.links }
+    for (const link of result.inferred_links) {
+      const current = links[link.key]
+      if (!current?.decision) {
+        links[link.key] = {
+          decision: 'accepted',
+          on_from: current?.on_from || link.on_from,
+          on_to: current?.on_to || link.on_to,
+        }
+      }
+    }
+    updateReview({ ...review, acknowledged, links })
+  }
+
   const onConfirm = async () => {
     if (!uploadedFile || pendingCount > 0 || confirming) return
     setConfirming(true)
     setConfirmError('')
     try {
-      // The server re-runs the pipeline on this same file and applies the
-      // review decisions below; nothing inferred client-side is trusted.
+      // The server reuses the understanding result cached at parse time for
+      // this exact file and only applies the review decisions below; nothing
+      // inferred client-side is trusted.
       await confirmWorkbook(uploadedFile, review)
+      // Drop the previously rendered system BEFORE leaving the page: the new
+      // confirm replaces both model and rows, so a stale bootstrap (e.g. the
+      // previous upload's entity keys) would otherwise briefly render as a
+      // correct-looking system with zero rows. Removing the cache sends /app
+      // through its loading gate and one fresh bootstrap.
+      queryClient.removeQueries({ queryKey: ['bootstrap', WORKSPACE_APP_KEY] })
+      queryClient.removeQueries({ queryKey: ['versions', WORKSPACE_APP_KEY] })
       navigate('/app')
     } catch (error) {
       setConfirmError(error instanceof Error ? error.message : '生成失败，请重试。')
@@ -588,6 +781,18 @@ export function UnderstandingPage() {
             <p className="view-sub">{result.file_name}</p>
           </div>
           <div className="understanding-stats">
+            <span
+              className={
+                result.understanding_engine === 'llm' ? 'stat-done' : 'stat-pending'
+              }
+              title={
+                result.understanding_engine === 'llm'
+                  ? '由大模型理解表格结构'
+                  : '大模型不可用或调用失败，已使用规则推断兜底'
+              }
+            >
+              {result.understanding_engine === 'llm' ? 'AI 理解' : '规则兜底'}
+            </span>
             <span>{entities.length} 个实体</span>
             <span>{result.inferred_links.length} 个关联</span>
             <span className={pendingCount === 0 ? 'stat-done' : 'stat-pending'}>
@@ -595,6 +800,26 @@ export function UnderstandingPage() {
             </span>
           </div>
         </header>
+
+        {result.understanding_notes.length > 0 && (
+          <section className="card understanding-block">
+            <h2 className="block-title">
+              理解说明
+              <span className="muted block-count">
+                {result.understanding_engine === 'llm' ? 'AI 给出的判断依据' : '兜底说明'}
+              </span>
+            </h2>
+            <ul className="queue-list">
+              {result.understanding_notes.map((note) => (
+                <li key={note} className="queue-reason">
+                  {note}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        <SheetWarningsSection result={result} />
 
         <ReviewQueue
           result={result}
@@ -621,6 +846,12 @@ export function UnderstandingPage() {
           </div>
         </section>
 
+        <MetricsSection
+          result={result}
+          review={review}
+          onAcknowledge={acknowledge}
+        />
+
         <RelationSection result={result} review={review} />
         <DroppedSheetsSection result={result} assembledSheets={assembledSheets} />
 
@@ -646,20 +877,26 @@ export function UnderstandingPage() {
             )}
           </div>
           <div className="confirm-bar-actions">
-            <span className={`confirm-state${pendingCount === 0 ? ' is-ready' : ''}`}>
-              {pendingCount === 0 ? '审查已完成' : `${pendingCount} 项待确认`}
-            </span>
+            {pendingCount > 0 ? (
+              <button
+                type="button"
+                className="btn btn-accept-all"
+                onClick={acceptAllPending}
+                title="将所有待处理项按当前推断一次性接受：实体/字段/指标标记为已确认，关联按当前关联字段接受。接受后仍可在上方队列逐条撤销或拒绝。"
+              >
+                一键确认剩余 {pendingCount} 项
+              </button>
+            ) : (
+              <span className="confirm-state is-ready">审查已完成</span>
+            )}
             <button
               type="button"
               className="btn btn-primary"
               disabled={!confirmReady}
+              title={pendingCount > 0 ? '待确认队列清零后才能生成' : undefined}
               onClick={() => void onConfirm()}
             >
-              {confirming
-                ? '正在生成…'
-                : pendingCount > 0
-                  ? `还有 ${pendingCount} 项待确认`
-                  : '确认并生成系统'}
+              {confirming ? '正在生成…' : '确认并生成系统'}
             </button>
           </div>
         </section>

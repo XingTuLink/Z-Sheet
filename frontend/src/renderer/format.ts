@@ -20,6 +20,17 @@ export function formatMoney(value: number): string {
   )}`
 }
 
+/** Format an ISO timestamp as local `YYYY-MM-DD HH:mm`; invalid input → '—'. */
+export function formatDateTime(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return EMPTY_CELL
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  )
+}
+
 /**
  * The single cell/text rendering rule for the whole renderer.
  * Pure and deterministic: same model + same value -> same string.

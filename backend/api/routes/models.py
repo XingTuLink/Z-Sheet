@@ -13,16 +13,20 @@ from sqlalchemy.orm import Session
 from backend.api.schemas import (
     ModelImportRequest,
     PatchSubmitRequest,
+    RollbackRequest,
     VersionDetail,
     VersionMeta,
 )
 from backend.domain.serialization import model_to_yaml
+from backend.logging_config import get_logger
 from backend.patch.apply import PatchError
 from backend.storage.db import get_db
 from backend.storage.models import ModelVersionRecord
 from backend.storage.repositories import model_repository as repo
 
 router = APIRouter(prefix="/api/v1/models", tags=["models"])
+
+logger = get_logger("models")
 
 
 def _version_meta(record: ModelVersionRecord) -> VersionMeta:
@@ -142,6 +146,93 @@ def get_version(app_key: str, version: int, db: Session = Depends(get_db)) -> An
         )
     except ValueError as exc:
         return JSONResponse(status_code=422, content={"detail": str(exc)})
+    return _version_detail(record)
+
+
+@router.post(
+    "/{app_key}/undo",
+    status_code=status.HTTP_201_CREATED,
+    response_model=VersionDetail,
+)
+def undo_latest_change(
+    app_key: str, body: RollbackRequest, db: Session = Depends(get_db)
+) -> Any:
+    """Undo the latest change: restore the previous version (append-only)."""
+    try:
+        current = repo.get_current(db, app_key)
+    except repo.AppNotFoundError:
+        return JSONResponse(
+            status_code=404, content={"detail": f"app {app_key!r} not found"}
+        )
+    except ValueError as exc:  # malformed app_key
+        return JSONResponse(status_code=422, content={"detail": str(exc)})
+    if current.version <= 1:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"detail": "当前已是最早版本，没有可撤销的修改"},
+        )
+    try:
+        record = repo.restore_version(
+            db, app_key, current.version - 1, operator=body.operator
+        )
+    except (repo.AppNotFoundError, repo.VersionConflictError) as exc:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+    except ValueError as exc:
+        return JSONResponse(status_code=422, content={"detail": str(exc)})
+    logger.info(
+        "撤销最新修改：app=%s v%d→v%d（operator=%s）",
+        app_key,
+        current.version,
+        record.version,
+        body.operator,
+    )
+    return _version_detail(record)
+
+
+@router.post(
+    "/{app_key}/versions/{version:int}/rollback",
+    status_code=status.HTTP_201_CREATED,
+    response_model=VersionDetail,
+)
+def rollback_to_version(
+    app_key: str,
+    version: int,
+    body: RollbackRequest,
+    db: Session = Depends(get_db),
+) -> Any:
+    """Rollback: append a new version equal to any historical snapshot."""
+    try:
+        current = repo.get_current(db, app_key)
+    except repo.AppNotFoundError:
+        return JSONResponse(
+            status_code=404, content={"detail": f"app {app_key!r} not found"}
+        )
+    except ValueError as exc:  # malformed app_key
+        return JSONResponse(status_code=422, content={"detail": str(exc)})
+    if version == current.version:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"detail": "目标版本就是当前版本，无需回滚"},
+        )
+    try:
+        record = repo.restore_version(db, app_key, version, operator=body.operator)
+    except repo.AppNotFoundError:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"version {version} of app {app_key!r} not found"},
+        )
+    except repo.VersionConflictError as exc:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+    except ValueError as exc:
+        return JSONResponse(status_code=422, content={"detail": str(exc)})
+    logger.info(
+        "回滚到历史版本：app=%s v%d→v%d（目标快照 v%d，operator=%s）",
+        app_key,
+        current.version,
+        record.version,
+        version,
+        body.operator,
+    )
     return _version_detail(record)
 
 

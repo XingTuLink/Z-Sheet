@@ -33,6 +33,7 @@ uv run pytest
 cd frontend
 pnpm install
 pnpm dev        # :5173，/api 代理到 :8000
+pnpm test       # vitest
 pnpm lint       # oxlint
 pnpm build      # tsc -b + vite build
 ```
@@ -43,6 +44,13 @@ pnpm build      # tsc -b + vite build
 docker compose build
 docker compose down -v
 docker compose up -d
+```
+
+容器起来后用只读探针确认 API、数据库迁移与 SPA 均正常：
+
+```bash
+curl -s http://localhost:8000/api/v1/health   # {"status":"ok",...}
+curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/   # 200（SPA）
 ```
 
 后端镜像同时构建前端，FastAPI 在单容器内提供 API 与 SPA 静态资源。
@@ -72,9 +80,17 @@ chore:    构建 / 工具 / 杂项
 ## Pull Request
 
 1. 从 `main` 切出描述性分支名；
-2. 后端 ruff / pyright / pytest 全过，前端 oxlint / build 全过；
+2. 后端 ruff / pyright / pytest 全过，前端 vitest / oxlint / build 全过；
 3. 新行为附带测试；修复尽量附带回归测试；
 4. PR 描述说明动机、改动点与验证方式。
+
+## Issue 与标签
+
+仓库使用 `.github/ISSUE_TEMPLATE/` 下的结构化模板（Bug 报告 / 功能请求）。
+模板只引用两个平台默认已存在的标签：`bug`、`enhancement`。仓库管理员首次公开时
+建议补充以下标签以便分流：`llm`（大模型相关）、`nl-patch`（自然语言修改）、
+`parser`（文件解析/脏数据）、`renderer`（生成应用）、`docker`（安装部署）、
+`good first issue`（默认已有）。标签是仓库设置，无法随代码自动创建。
 
 ## 许可证
 

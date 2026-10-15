@@ -1,0 +1,94 @@
+name: Bug 报告
+description: 报告 Z-Sheet 的缺陷、崩溃或不符合预期的行为
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！请尽量补全下列信息——**理解类问题请务必提供脱敏后的表格样例或表头结构**，
+        否则问题通常无法复现。敏感业务数据请先替换成假数据。
+
+  - type: dropdown
+    id: version
+    attributes:
+      label: 版本
+      description: 你正在使用的版本（`/api/v1/health` 返回 version）
+      options:
+        - 0.1.0-alpha.1（Docker 镜像）
+        - 0.1.0-alpha.1（源码运行）
+        - 其他/更早版本（请在下方说明）
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 问题环节
+      multiple: true
+      options:
+        - 安装 / Docker 启动
+        - Excel/CSV 上传与解析
+        - AI 理解（LLM 配置、超时、错误结果）
+        - 审查 / Confirm 确认
+        - 生成的应用（列表/详情/表单/Dashboard）
+        - 自然语言修改（NL Patch / 回滚）
+        - 其他
+    validations:
+      required: true
+
+  - type: dropdown
+    id: llm
+    attributes:
+      label: LLM 配置
+      options:
+        - DeepSeek 公有云（默认）
+        - Ollama / vLLM 等本地引擎
+        - 未配置（纯规则引擎）
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 现象与预期
+      description: 实际发生了什么？你预期应该怎样？
+      placeholder: |
+        实际：上传「客户跟进.xlsx」后，确认页点击「确认并生成系统」一直转圈。
+        预期：几秒内跳转到 /app。
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开上传页，选择 xxx.xlsx
+        2. ……
+        3. ……
+    validations:
+      required: true
+
+  - type: textarea
+    id: sample
+    attributes:
+      label: 表格样例 / 表头结构（脱敏）
+      description: 可粘贴工作表名 + 表头行 + 2~3 行假数据；如方便复现可附上脱敏文件
+      placeholder: |
+        Sheet「客户跟进」：
+        客户名称 | 跟进日期 | 跟进状态 | 下次联系
+        甲方公司 | 2026/10/1 | 已联系 | 10月8日
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / 报错信息
+      description: 浏览器控制台、网络响应或 docker compose logs 中 zsheet 开头的日志
+      render: text
+
+  - type: input
+    id: os
+    attributes:
+      label: 操作系统与浏览器
+      placeholder: 例如：Windows 11 + Docker Desktop；Chrome 130

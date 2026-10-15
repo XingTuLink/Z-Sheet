@@ -1,5 +1,9 @@
 .git
 .github
+# Local secrets (LLM API keys) are injected via compose env_file at runtime.
+.env
+.env.*
+!.env.example
 doc
 **/__pycache__/
 **/*.pyc
