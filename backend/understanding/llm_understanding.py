@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from backend.ai.provider import ChatClient, LLMError
 from backend.ingestion.schemas import ParsedSheet
+from backend.logging_config import get_logger
 
 from .model_assembly import EntityPlan
 from .naming import unique_field_keys
@@ -43,6 +44,8 @@ from .schemas import (
 FIELD_TYPES: frozenset[str] = frozenset(
     {"string", "number", "money", "date", "enum", "phone"}
 )
+
+logger = get_logger("understanding.llm")
 FIELD_ROLES: frozenset[str] = frozenset(
     {"identifier", "dimension", "measure", "time", "enum", "text"}
 )
@@ -357,6 +360,7 @@ def apply_llm_understanding(
         payload = client.complete_json(build_messages(result))
         proposal = LLMUnderstanding.model_validate(payload)
     except (LLMError, ValidationError) as exc:
+        logger.warning("LLM 理解失败，自动降级为规则引擎：%s", exc)
         notes.append(f"LLM 理解失败，已使用规则引擎结果：{exc}")
         return "rules", notes
 

@@ -1,8 +1,8 @@
 # Z-Sheet
 
-表格变系统 —— 上传一份 Excel/CSV，AI 将其理解为 Business Model（实体、字段、关系、指标、视图），再由**确定性 Renderer** 生成一个可以直接使用的小系统。数据全部留在你自己的环境中，不依赖任何云账号。
+**表格变系统** —— 上传一份 Excel/CSV，AI 将其理解为 Business Model（实体、字段、关系、指标、视图），再由**确定性 Renderer** 生成一个可以直接使用的小系统。模型是唯一事实来源，渲染过程不调用 AI，结果可复现、可测试。
 
-> 状态：实验性开发中（M4「Excel → 可用系统」本地验证通过；Day 17–19 改动待查看，尚未提交/推送，main 仍停在 M3）。首屏即上传页：上传真实 Excel 后，页面按真实管线阶段展示进度（解析工作表 → 识别字段 / 实体 / 关联 → 生成系统），在理解结果页逐项审查（接受 / 拒绝关联、改关联字段、确认不确定项），确认后即用以你自己的模型和表格数据渲染的系统；系统支持列表查询、详情关联、新增/编辑/删除持久化与首页 Dashboard，内置演示系统可独立访问。
+> **状态：0.1.0-alpha.1 — Experimental（实验性）。** 核心闭环（Excel → AI 理解 → 人工审查 → 可用系统 → 自然语言持续修改）已跑通并内置故障降级；面向早期试用者，接口与界面仍可能变化。详见 [CHANGELOG.md](./CHANGELOG.md) 与 [ROADMAP.md](./ROADMAP.md)。
 
 ## 它如何工作
 
@@ -11,55 +11,83 @@ Excel / CSV
     →  AI 理解（结构化 Business Model，可校验、可版本化）
     →  model.yaml
     →  确定性 Renderer（model + data → UI，渲染过程不调用 AI）
-    →  Web App（列表 / 详情 / 表单 / …）
+    →  Web App（列表 / 详情 / 表单 / Dashboard / 自然语言修改）
 ```
 
-模型是唯一事实来源：字段类型、关联、指标与页面视图都声明在 model 中；同一模型永远渲染出同一界面，结果可复现、可测试。
+AI 是可选的：不配置任何大模型时，系统以内置**规则引擎**运行（擅长标准销售/订单/商品台账）；配置任意 **OpenAI 兼容接口**（公有云或本地 Ollama / vLLM）后，LLM 负责理解任意业务表，规则引擎同时作为其输出的硬校验器与故障兜底——AI 超时、限流或返回非法内容时自动重试、自动降级，解析与使用不会中断。
 
-## 当前能力
+## 当前能力（0.1.0-alpha.1）
 
-- Business Model Schema（实体 / 字段 / 关系 / 指标 / 视图）与 YAML 导入、导出
-- 模型版本化存储（Alembic 迁移、Snapshot、JSON Patch、三层校验）
-- 文件解析 API：`.xlsx`（多 Sheet）与 `.csv`，Sheet 发现、表头行定位、UTF-8/UTF-16/GB18030 编码兼容（暂为无状态接口，尚无上传界面）
-- 列画像：空值率、distinct/唯一/重复统计、高频值 Top 5、整行重复数，以及确定性等距采样（为类型推断与预览供数）
-- 六类字段确定性类型推断：string / number / money / date / enum / phone，带置信度档位（≥0.85 已识别 / 0.60–0.85 建议确认 / <0.60 无法确定）、判定信号与 enum 候选值；无 AI，规则全部可测
-- 六类语义角色推断：identifier / dimension / measure / time / enum / text，独立置信度与审查标记（唯一值+标识列名定 identifier；金额/日期/电话机械映射；词类枚举为维度、代码枚举为 enum；长文本与短标签分列 text/dimension）
-- 实体识别：每表产出一个实体候选 customer / order / product（外加无法判定时诚实给 unknown），综合表名关键词与字段构成（订单=标识+流水金额+时间；商品=标识+单价/规格无时间轴；客户=标识+联系方式无流水无时间），名称与结构强冲突时降置信待确认，并给出 key_field
-- 一对多关系推断（V0.1 仅此一种）：同名字段 + 值集合召回率/精确率 + 父侧唯一 / 子侧重复四重证据，四档置信度（0.88 / 0.75 / 0.75 异名语义 / 0.63 仅列名疑似外键）；两侧都唯一（一对一）不推断；无源 FK 定义，所有关系一律 `needs_review`，禁止假确定
-- Business Model 自动组装：中文列名映射 snake_case（词典外按位置兜底 `field_N`）、同类实体命名空间去重、枚举无候选值安全降级；每个实体自动生成 count 指标，并为流水金额生成 sum 指标（单价不汇总），自动产出 list / detail / form / dashboard 视图与导航；产物逐字段通过领域层引用完整性校验并可 YAML 导出，能直接走模型导入接口持久化
-- 上传落地页与真实分阶段进度（SSE）：点击 / 拖拽上传 `.xlsx` / `.csv`（20 MB 内），后端通过 `POST /api/v1/ingestion/parse/stream` 逐个下发真实阶段事件（各阶段计数均为实际产出，不是等待动画），解析错误以事件形式回传；完成态汇总工作表 / 字段 / 实体 / 关联数量、实体标签与未纳入模型的工作表说明
-- 理解结果浏览页（Understanding）：Entity 卡片（实体名 / key / 来源工作表 / 主键高亮）内嵌 Field 卡片（中文字段名、snake_case key、类型与语义角色标签、枚举候选值）；未纳入模型的工作表单独列出并给出跳过原因（空表 / unknown / 缺唯一标识字段）；数据经 sessionStorage 传递，无数据直达时有回上传引导
-- 置信度三档与人工审查（设计 10.1/10.2）：每个字段/实体/关联按 ≥0.85 已识别（绿）、0.60–0.85 建议确认（黄）、<0.60 无法确定（红）展示数值与档位；**待确认队列**汇总所有 needs_review 项，字段/实体可逐项确认或撤销，关联可接受 / 拒绝 / 下拉改 on 关联字段；关键口径：Excel 无外键定义，凡是推断关联的子侧连接字段（如订单.客户名称）即使值完全匹配也强制 0.63 + 待确认（"列名一致，但源数据没有外键定义"），禁止假确定；审查决策在确认页直接生效
-- 识别失败引导：文件能解析但识别不出客户 / 商品 / 订单类主体时（报价单、功能清单等没有业务唯一标识的表），页面如实说明原因，并可一键下载 `Z-Sheet标准模板.xlsx`（含三表示例数据，模板自身即可被完整识别）
-- 用户 Confirm 全链路（M3）：审查队列清零后「确认并生成系统」把决策提交到 `POST /api/v1/ingestion/confirm`——服务端对原文件重跑确定性管线（不采信客户端回传的推断），拒绝的关联移除、on 字段覆盖后**重组**视图与指标并通过领域全量校验；模型作为 workspace 应用版本落库（重复确认追加新版本），表格行数据按六类类型规整（货币符号 / 千分位 / 中文日期 → ISO 等）并校验后存入 app_data；确认后跳转到 `/app`，列表 / 详情 / 表单直接运行在你自己的实体与数据上，`/app/demo` 内置演示系统互不影响
-- 确定性 Renderer：
-  - **List**：按模型声明的列渲染表格；**搜索**（跨模型声明字段，空白多词 AND，中英端子串匹配，零模型调用）、**多选过滤**（枚举 / 维度字段，含计数与「空」桶）、**排序**（默认按模型 sorts，列头三态 升 / 降 / 恢复；数字按值、日期按时序、空值沉底）、**分页**（10 / 20 / 50 每页，页码窗口）；空结果可一键清除全部条件
-  - **Detail**：字段详情 + 一对多 Related List；关联表按子列表模型列与默认排序展示，可进入子记录详情，无匹配时显示空态
-  - **Form / CRUD**：按字段类型生成新增与编辑表单，支持必填、数字/日期/枚举等前后端校验；业务 key 编辑态锁定；列表与详情均可进入编辑，详情可删除；POST/PUT/DELETE 后写入 app_data，刷新页面仍保留
-  - **Dashboard**：实体总数与金额类指标卡、最近数据表、按月趋势条、低基数枚举分布；指标和图表数据全部由模型 + bootstrap 数据确定性计算，无图表库依赖
-- 单容器交付：FastAPI 同时提供 API 与构建后的前端
+**从文件到系统**
 
-尚未提供：自然语言修改、模型级 Patch 回滚、多数据源与权限体系。这些是后续里程碑的内容。
+- `.xlsx`（多 Sheet）/ `.csv` 解析：表头行定位、UTF-8/UTF-16/GB18030 编码兼容、标点伪行等脏数据治理，20 MB 上限
+- 列画像（空值率、distinct/唯一/重复、高频值、确定性等距采样）与六类字段类型推断（string / number / money / date / enum / phone）、六类语义角色推断，全部带置信度与待确认标记
+- 实体识别与一对多关系推断：四重证据 + 四档置信度，无外键定义的关联一律进人工审查，禁止假确定
+- 上传页 SSE 分阶段真实进度；Understanding 页面逐字段/实体/关联审查（接受、拒绝、改关联字段、一键确认待处理项）
+- Confirm 全链路：服务端重跑管线（不采信客户端推断）→ 决策重组模型 → 领域全量校验 → 版本落库 → 数据按类型规整入库
 
-## 快速开始（Docker）
+**AI 理解层（可选，OpenAI 兼容）**
 
-前置：已安装 Docker（含 Compose）。
+- 统一 Provider：默认 DeepSeek 公有云，环境变量一键切换 Ollama / vLLM 等本地引擎（本地引擎无需 Key）
+- LLM 提案经真实工作表硬校验：列必须存在、类型/关系必须合法，漏列自动回退规则推断，非法/低置信项进审查队列
+- **韧性设计**：超时分类、5xx/429/坏输出小预算自动重试（`ZSHEET_LLM_MAX_RETRIES`），重试耗尽自动降级为规则引擎，降级事件写入日志与页面说明；日志中的 API Key 一律掩码
+
+**生成的应用（确定性 Renderer）**
+
+- List：跨字段搜索（多词 AND、中英端子串）、多选过滤（含空桶）、三态排序、分页
+- Detail：字段详情 + 一对多关联列表，可下钻子记录
+- Form / CRUD：类型化表单、必填与前后端校验、业务键编辑锁定、持久化
+- Dashboard：指标卡、月度趋势、枚举分布（零图表库依赖）
+
+**自然语言修改（NL Patch）**
+
+- 一句话修改系统：加/删/改字段、改实体名等高风险操作生成结构化意图与中文变更说明
+- 预览 → 确认/拒绝的防篡改会话（补丁不出服务端、1 小时过期、版本漂移 409）
+- **撤销与回滚**：undo 撤销最新修改、rollback 回到任意历史版本；版本链 append-only，历史从不改写，回滚后可继续修改
+
+**交付与运维**
+
+- 单容器（FastAPI 同时提供 API 与构建后的 SPA）、Alembic 自动迁移、SQLite 数据卷、容器健康检查
+- 内置演示系统（销售管理）与 4 份带瑕疵的真实感演示数据集（`examples/demo_data/`）
+
+**暂不提供（V0.1 禁区）**：数据库直连、多用户权限、工作流/审批/通知、移动端、拖拽式低代码、复杂 BI、Agent、插件生态、Excel 双向同步、多对多关系。见 [ROADMAP.md](./ROADMAP.md)。
+
+## 快速开始（Docker，推荐）
+
+前置：已安装 Docker（含 Compose 插件）。Windows / macOS 用 Docker Desktop，Linux 用 Docker Engine + Compose。
+
+**1. 准备 LLM 配置（可选但推荐）**
+
+```bash
+cp .env.example .env
+# 编辑 .env：
+#   - 有 DeepSeek Key：直接填 ZSHEET_LLM_API_KEY 即可（默认已是云端配置）
+#   - 想用本地 Ollama：改 BASE_URL / MODEL，API_KEY 留空（详见 .env 内注释）
+#   - 不想配置 LLM：跳过本步，系统以规则引擎运行
+```
+
+**2. 构建并启动**
 
 ```bash
 docker compose up -d --build
 ```
 
-打开 <http://localhost:8000> 。首次启动会自动执行数据库迁移并导入内置演示模型（销售管理：客户与订单）。
+打开 <http://localhost:8000> 。容器启动时自动执行数据库迁移；首次打开应用时会自动导入内置演示系统（客户 / 订单），也可直接上传自己的 Excel。
 
-停止并清理数据卷：
+健康检查：`GET http://localhost:8000/api/v1/health`（返回版本号与数据库状态）。
+
+停止；加 `-v` 同时清空数据卷：
 
 ```bash
-docker compose down -v
+docker compose down        # 停止，保留数据
+docker compose down -v     # 停止并清空全部数据
 ```
+
+> Linux 本地引擎：把 `.env` 里的 Ollama 地址换成 `http://localhost:11434/v1` 并注意 Ollama 默认只监听 127.0.0.1；容器访问宿主机统一用 `host.docker.internal`（Linux 需 Compose v2.3+ 或添加 `--add-host`）。
 
 ## 本地开发
 
-环境要求：Python 3.12、[uv](https://docs.astral.sh/uv/) 0.12、Node 24、pnpm 12。
+环境要求：Python 3.12、[uv](https://docs.astral.sh/uv/) 0.12、Node 24、pnpm 12。Windows / Linux / macOS 均可开发。
 
 后端（:8000）：
 
@@ -69,7 +97,7 @@ uv run alembic upgrade head
 uv run uvicorn backend.api.main:app --reload
 ```
 
-前端（:5173，`/api` 已代理到 :8000）：
+前端（:5173，`/api` 已代理到 :8000；5173 被占用时 Vite 会自动改用 5174，仍走代理）：
 
 ```bash
 cd frontend
@@ -77,7 +105,21 @@ pnpm install
 pnpm dev
 ```
 
-打开 <http://localhost:5173> 。首次访问会通过 API 自动导入演示模型。
+打开 <http://localhost:5173> 。LLM 配置同样通过仓库根目录的 `.env`（或 `ZSHEET_*` 环境变量）生效；不配置即规则引擎模式，全部离线测试均在此模式运行。
+
+## 环境变量
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `ZSHEET_LLM_BASE_URL` | `https://api.deepseek.com` | OpenAI 兼容接口地址（`/chat/completions`） |
+| `ZSHEET_LLM_MODEL` | `deepseek-flash` | 模型名（Ollama 如 `qwen2.5:7b`） |
+| `ZSHEET_LLM_API_KEY` | _空_ | API Key；本地引擎留空，留空且为云端地址时不调用 LLM |
+| `ZSHEET_LLM_TIMEOUT` | `60` | 单次请求超时秒数 |
+| `ZSHEET_LLM_MAX_RETRIES` | `1` | 失败后额外重试次数（0 = 不重试） |
+| `ZSHEET_LLM_ENABLE_THINKING` | `true` | 仅 DeepSeek 官方端点发送 thinking 参数 |
+| `ZSHEET_LOG_LEVEL` | `INFO` | 日志级别（DEBUG/INFO/WARNING/ERROR） |
+| `ZSHEET_DATA_DIR` | `./data` | SQLite 与数据目录（容器内固定 `/app/data`） |
+| `ZSHEET_CORS_ORIGINS` | 本地 5173 | JSON 数组，允许跨域访问 API 的来源 |
 
 ## 检查与测试
 
@@ -97,22 +139,23 @@ pnpm build
 ## 项目结构
 
 ```text
-backend/domain      Business Model 与 Patch 的领域定义、序列化
-backend/understanding  解析后的理解管线：画像 → 类型 → 角色 → 实体 → 关系 → 模型组装
-backend/storage     SQLAlchemy 模型、仓储（模型版本与 app_data 运行时数据）
-backend/patch       RFC 6902 子集的确定性 Patch 应用器
-backend/runtime     渲染运行时引导（model + data）
-backend/api         FastAPI 路由（解析 / 模型管理 / 运行时）
-migrations          Alembic 迁移
-frontend/src/renderer  类型驱动的确定性渲染（View Resolver + 视图组件）
-examples            演示模型与种子数据
-docker              镜像与入口脚本
+backend/ai            OpenAI 兼容 LLM Provider（超时分类、重试、Key 掩码）
+backend/domain        Business Model 与 Patch 的领域定义、序列化
+backend/understanding  理解管线：画像 → 类型 → 角色 → 实体 → 关系 → LLM 提案校验 → 组装
+backend/patch         RFC 6902 子集的确定性 Patch 应用器 + NL 意图解析/生成
+backend/storage       SQLAlchemy 模型、仓储（模型版本与 app_data 运行时数据）
+backend/runtime       渲染运行时引导（model + data）
+backend/api           FastAPI 路由（解析 / 模型管理 / Patch 会话 / 运行时）
+migrations            Alembic 迁移
+frontend/src/renderer 类型驱动的确定性渲染（View Resolver + 视图组件）
+examples              演示模型、种子数据与 4 份演示 Excel 数据集
+docker                镜像与入口脚本
 ```
 
 ## 参与贡献
 
-欢迎 Issue 与 PR，请先阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)。
+欢迎 Issue 与 PR，请先阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)；后续计划见 [ROADMAP.md](./ROADMAP.md)，版本历史见 [CHANGELOG.md](./CHANGELOG.md)。
 
 ## 许可证
 
-[Apache License 2.0](./LICENSE)。
+[GNU Affero General Public License v3.0](./LICENSE)（AGPL-3.0）。

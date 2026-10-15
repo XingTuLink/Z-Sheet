@@ -8,7 +8,7 @@ import type { DetailView as DetailViewModel } from '../types'
 import { RelatedList } from './RelatedList'
 
 export function DetailView({ view }: { view: DetailViewModel }) {
-  const { bootstrap, records, deleteRecord } = useRuntime()
+  const { bootstrap, records, readOnly, deleteRecord } = useRuntime()
   const navigate = useNavigate()
   const model = bootstrap.model
   const [searchParams] = useSearchParams()
@@ -59,7 +59,7 @@ export function DetailView({ view }: { view: DetailViewModel }) {
           <h1>{view.title}</h1>
           {row && <p className="view-sub">{String(row[entity.key_field])}</p>}
         </div>
-        {row && formView && (
+        {row && formView && !readOnly && (
           <div className="detail-actions">
             <Link
               className="btn btn-secondary"

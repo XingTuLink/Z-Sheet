@@ -73,6 +73,10 @@ export interface UnderstandingSheet {
   name: string
   is_empty: boolean
   columns: string[]
+  // Parser-level notices (ignored total rows / note & footer rows pasted
+  // under the table / weak header detection …). Never blocks generation,
+  // but the user must be able to see what was skipped.
+  warnings?: string[] | null
   profile: { row_count: number }
   inferred_entity: {
     key: string

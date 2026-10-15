@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 先检索已有 Issue
+    url: https://atomgit.com/XingTuLink/Z-Sheet/issues
+    about: 提交前请先搜索是否已有相同的 bug 或功能请求，避免重复。

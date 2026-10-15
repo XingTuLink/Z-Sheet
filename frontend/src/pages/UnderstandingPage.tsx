@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
@@ -18,7 +19,9 @@ import {
   type UnderstandingResult,
   type UnderstandingSheet,
 } from '../api/ingestion'
+import { WORKSPACE_APP_KEY } from '../api/runtime'
 import { getLastUploadedFile } from '../api/sessionStore'
+import { BrandLockup, CompanyByline } from '../components/Brand'
 
 const TYPE_LABELS: Record<FieldType, string> = {
   string: '文本',
@@ -570,8 +573,35 @@ function DroppedSheetsSection({
   )
 }
 
+function SheetWarningsSection({ result }: { result: UnderstandingResult }) {
+  const entries = result.sheets.flatMap((sheet) =>
+    (sheet.warnings ?? []).map((warning) => ({ sheet: sheet.name, warning })),
+  )
+  if (entries.length === 0) return null
+
+  return (
+    <section className="card understanding-block">
+      <h2 className="block-title">
+        解析时自动跳过的内容
+        <span className="muted block-count">
+          这些行/列未计入数据，不影响生成；如属真实数据请回表格调整
+        </span>
+      </h2>
+      <ul className="queue-list">
+        {entries.map(({ sheet, warning }) => (
+          <li key={`${sheet}:${warning}`} className="queue-reason">
+            <span className="muted">工作表「{sheet}」：</span>
+            {warning}
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
 export function UnderstandingPage() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const result = useMemo(() => loadUnderstandingResult(), [])
   const [review, setReview] = useState<ReviewState>(() => loadReviewState())
   const [confirming, setConfirming] = useState(false)
@@ -584,7 +614,9 @@ export function UnderstandingPage() {
     return (
       <main className="gate">
         <div className="card gate-card">
-          <h1 className="gate-brand">Z-Sheet</h1>
+          <h1 className="gate-brand">
+            <BrandLockup logoSize={34} />
+          </h1>
           <p>还没有可浏览的理解结果。</p>
           <p className="muted">
             请先上传一个 Excel 或 CSV 文件；如果表格未能识别出业务实体，可下载标准模板参照整理。
@@ -597,6 +629,7 @@ export function UnderstandingPage() {
               下载标准模板
             </a>
           </p>
+          <CompanyByline />
         </div>
       </main>
     )
@@ -682,6 +715,35 @@ export function UnderstandingPage() {
     })
   }
 
+  const acceptAllPending = () => {
+    const acknowledged = { ...review.acknowledged }
+    for (const entity of entities) {
+      if (entityConfidence.get(entity.key)?.needs_review) {
+        acknowledged[entity.key] = true
+      }
+      for (const field of entity.fields) {
+        if (field.needs_review) {
+          acknowledged[fieldAckId(entity.key, field.key)] = true
+        }
+      }
+    }
+    for (const metric of result.business_model?.metrics ?? []) {
+      if (metric.needs_review) acknowledged[metricAckId(metric.key)] = true
+    }
+    const links = { ...review.links }
+    for (const link of result.inferred_links) {
+      const current = links[link.key]
+      if (!current?.decision) {
+        links[link.key] = {
+          decision: 'accepted',
+          on_from: current?.on_from || link.on_from,
+          on_to: current?.on_to || link.on_to,
+        }
+      }
+    }
+    updateReview({ ...review, acknowledged, links })
+  }
+
   const onConfirm = async () => {
     if (!uploadedFile || pendingCount > 0 || confirming) return
     setConfirming(true)
@@ -691,6 +753,13 @@ export function UnderstandingPage() {
       // this exact file and only applies the review decisions below; nothing
       // inferred client-side is trusted.
       await confirmWorkbook(uploadedFile, review)
+      // Drop the previously rendered system BEFORE leaving the page: the new
+      // confirm replaces both model and rows, so a stale bootstrap (e.g. the
+      // previous upload's entity keys) would otherwise briefly render as a
+      // correct-looking system with zero rows. Removing the cache sends /app
+      // through its loading gate and one fresh bootstrap.
+      queryClient.removeQueries({ queryKey: ['bootstrap', WORKSPACE_APP_KEY] })
+      queryClient.removeQueries({ queryKey: ['versions', WORKSPACE_APP_KEY] })
       navigate('/app')
     } catch (error) {
       setConfirmError(error instanceof Error ? error.message : '生成失败，请重试。')
@@ -750,6 +819,8 @@ export function UnderstandingPage() {
           </section>
         )}
 
+        <SheetWarningsSection result={result} />
+
         <ReviewQueue
           result={result}
           entityConfidence={entityConfidence}
@@ -806,20 +877,26 @@ export function UnderstandingPage() {
             )}
           </div>
           <div className="confirm-bar-actions">
-            <span className={`confirm-state${pendingCount === 0 ? ' is-ready' : ''}`}>
-              {pendingCount === 0 ? '审查已完成' : `${pendingCount} 项待确认`}
-            </span>
+            {pendingCount > 0 ? (
+              <button
+                type="button"
+                className="btn btn-accept-all"
+                onClick={acceptAllPending}
+                title="将所有待处理项按当前推断一次性接受：实体/字段/指标标记为已确认，关联按当前关联字段接受。接受后仍可在上方队列逐条撤销或拒绝。"
+              >
+                一键确认剩余 {pendingCount} 项
+              </button>
+            ) : (
+              <span className="confirm-state is-ready">审查已完成</span>
+            )}
             <button
               type="button"
               className="btn btn-primary"
               disabled={!confirmReady}
+              title={pendingCount > 0 ? '待确认队列清零后才能生成' : undefined}
               onClick={() => void onConfirm()}
             >
-              {confirming
-                ? '正在生成…'
-                : pendingCount > 0
-                  ? `还有 ${pendingCount} 项待确认`
-                  : '确认并生成系统'}
+              {confirming ? '正在生成…' : '确认并生成系统'}
             </button>
           </div>
         </section>

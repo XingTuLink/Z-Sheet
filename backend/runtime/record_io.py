@@ -46,34 +46,55 @@ class RuntimeData:
     """Whether records came from mutable app_data (False while seeded demo)."""
 
 
-def load_runtime_data(db: Session, app_key: str) -> RuntimeData:
-    """Resolve the current model and effective row document for an app."""
-    try:
-        version = repo.get_current(db, app_key, raise_if_missing=False)
-        if version is None:
-            if app_key != seed.DEMO_APP_KEY:
-                raise RecordNotFound(f"应用 {app_key!r} 不存在")
-            version = seed.ensure_demo_model(db)
-        model = BusinessModel.model_validate(version.snapshot)
-        stored = app_data_repository.get_records(db, app_key)
-        if stored is not None:
-            records = stored
-        elif app_key == seed.DEMO_APP_KEY:
-            records = seed.load_demo_records(model)
-        else:
-            records = {}
-    except ValueError as exc:
-        # validate_app_key / malformed persisted model errors are request
-        # shape/semantics failures, not a missing resource.
-        if isinstance(exc, RecordNotFound):
-            raise
-        raise RecordError(str(exc)) from exc
+def _runtime_data_from_version(
+    db: Session, version: ModelVersionRecord
+) -> RuntimeData:
+    """Build the render payload for one pinned model version.
 
+    Records are read live (mutable app_data, or bundled seed rows for the
+    demo); only the model is version-specific. Day 33 publications reuse this
+    to serve a pinned model without forking record storage.
+    """
+    model = BusinessModel.model_validate(version.snapshot)
+    stored = app_data_repository.get_records(db, version.app_key)
+    if stored is not None:
+        records = stored
+    elif version.app_key == seed.DEMO_APP_KEY:
+        records = seed.load_demo_records(model)
+    else:
+        records = {}
     normalized = {
         entity.key: list(records.get(entity.key, []) or [])
         for entity in model.entities
     }
     return RuntimeData(record=version, model=model, records=normalized)
+
+
+def load_runtime_data(db: Session, app_key: str) -> RuntimeData:
+    """Resolve the current model and effective row document for an app."""
+    version = repo.get_current(db, app_key, raise_if_missing=False)
+    if version is None:
+        if app_key != seed.DEMO_APP_KEY:
+            raise RecordNotFound(f"应用 {app_key!r} 不存在")
+        version = seed.ensure_demo_model(db)
+    try:
+        return _runtime_data_from_version(db, version)
+    except ValueError as exc:
+        # Malformed persisted model is a semantics failure, not a 404.
+        raise RecordError(str(exc)) from exc
+
+
+def load_pinned_runtime_data(
+    db: Session, app_key: str, model_version: int
+) -> RuntimeData:
+    """Resolve a specific published model version with live records (Day 33)."""
+    try:
+        version = repo.get_version(db, app_key, model_version)
+        return _runtime_data_from_version(db, version)
+    except ValueError as exc:
+        if isinstance(exc, RecordNotFound):
+            raise
+        raise RecordError(str(exc)) from exc
 
 
 def get_entity(model: BusinessModel, entity_key: str) -> Entity:

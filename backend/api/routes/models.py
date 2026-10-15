@@ -18,12 +18,15 @@ from backend.api.schemas import (
     VersionMeta,
 )
 from backend.domain.serialization import model_to_yaml
+from backend.logging_config import get_logger
 from backend.patch.apply import PatchError
 from backend.storage.db import get_db
 from backend.storage.models import ModelVersionRecord
 from backend.storage.repositories import model_repository as repo
 
 router = APIRouter(prefix="/api/v1/models", tags=["models"])
+
+logger = get_logger("models")
 
 
 def _version_meta(record: ModelVersionRecord) -> VersionMeta:
@@ -176,6 +179,13 @@ def undo_latest_change(
         return JSONResponse(status_code=409, content={"detail": str(exc)})
     except ValueError as exc:
         return JSONResponse(status_code=422, content={"detail": str(exc)})
+    logger.info(
+        "撤销最新修改：app=%s v%d→v%d（operator=%s）",
+        app_key,
+        current.version,
+        record.version,
+        body.operator,
+    )
     return _version_detail(record)
 
 
@@ -215,6 +225,14 @@ def rollback_to_version(
         return JSONResponse(status_code=409, content={"detail": str(exc)})
     except ValueError as exc:
         return JSONResponse(status_code=422, content={"detail": str(exc)})
+    logger.info(
+        "回滚到历史版本：app=%s v%d→v%d（目标快照 v%d，operator=%s）",
+        app_key,
+        current.version,
+        record.version,
+        version,
+        body.operator,
+    )
     return _version_detail(record)
 
 

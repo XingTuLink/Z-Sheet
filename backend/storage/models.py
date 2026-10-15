@@ -82,6 +82,36 @@ class PatchSessionRecord(Base):
     )
 
 
+class AppPublicationRecord(Base):
+    """Public link state for one app (Day 33 publish feature).
+
+    Exactly one row per app. Publishing pins ``model_version``: visitors of
+    the slug keep seeing that model while the owner keeps editing; records
+    stay live. Changing ``slug`` immediately invalidates the old URL; setting
+    ``status`` to unpublished takes the link down (the row, and hence slug
+    ownership, is retained so nobody can squat a previously used slug).
+    ``creator_id`` is reserved NULL for the future users / approval system.
+    """
+
+    __tablename__ = "app_publications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    app_key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    slug: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    model_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="published")
+    creator_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+
 class UnderstandingSessionRecord(Base):
     """Server-side understanding result keyed by uploaded file hash (Day 22).
 

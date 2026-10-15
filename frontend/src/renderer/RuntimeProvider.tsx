@@ -11,9 +11,11 @@ import type { Bootstrap, RecordRow } from './types'
 
 export function RuntimeProvider({
   bootstrap,
+  readOnly = false,
   children,
 }: {
   bootstrap: Bootstrap
+  readOnly?: boolean
   children: ReactNode
 }) {
   const [records, setRecords] = useState<Record<string, RecordRow[]>>(() =>
@@ -26,6 +28,7 @@ export function RuntimeProvider({
       row: RecordRow,
       mode: 'create' | 'update',
     ): Promise<void> => {
+      if (readOnly) throw new Error('公开发布页为只读模式')
       const entity = bootstrap.model.entities.find((item) => item.key === entityKey)
       if (!entity) throw new Error(`实体不存在：${entityKey}`)
       const key = String(row[entity.key_field] ?? '')
@@ -47,11 +50,12 @@ export function RuntimeProvider({
         }
       })
     },
-    [bootstrap.app_key, bootstrap.model.entities],
+    [bootstrap.app_key, bootstrap.model.entities, readOnly],
   )
 
   const deleteRecord = useCallback(
     async (entityKey: string, key: string): Promise<void> => {
+      if (readOnly) throw new Error('公开发布页为只读模式')
       const entity = bootstrap.model.entities.find((item) => item.key === entityKey)
       if (!entity) throw new Error(`实体不存在：${entityKey}`)
       await deleteRecordApi(bootstrap.app_key, entityKey, key)
@@ -62,12 +66,12 @@ export function RuntimeProvider({
         ),
       }))
     },
-    [bootstrap.app_key, bootstrap.model.entities],
+    [bootstrap.app_key, bootstrap.model.entities, readOnly],
   )
 
   const value = useMemo(
-    () => ({ bootstrap, records, saveRecord, deleteRecord }),
-    [bootstrap, records, saveRecord, deleteRecord],
+    () => ({ bootstrap, records, readOnly, saveRecord, deleteRecord }),
+    [bootstrap, records, readOnly, saveRecord, deleteRecord],
   )
 
   return <RuntimeContext.Provider value={value}>{children}</RuntimeContext.Provider>

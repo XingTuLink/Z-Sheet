@@ -10,6 +10,7 @@ import {
   type UnderstandingResult,
 } from '../api/ingestion'
 import { setLastUploadedFile } from '../api/sessionStore'
+import { BrandLockup, CompanyByline } from '../components/Brand'
 
 type Phase = 'idle' | 'working' | 'done' | 'error'
 type StageState = 'pending' | 'active' | 'done'
@@ -163,7 +164,9 @@ export function UploadPage() {
   return (
     <main className="gate upload-page">
       <div className="card upload-card">
-        <h1 className="gate-brand">Z-Sheet</h1>
+        <h1 className="gate-brand">
+          <BrandLockup logoSize={34} />
+        </h1>
 
         {phase === 'idle' && (
           <>
@@ -222,9 +225,22 @@ export function UploadPage() {
                 return (
                   <li key={def.key} className={`stage-item ${state.status}`}>
                     <span className="stage-mark" aria-hidden="true">
-                      {state.status === 'done' ? '✓' : state.status === 'active' ? '→' : ''}
+                      {state.status === 'done' ? (
+                        '✓'
+                      ) : state.status === 'active' ? (
+                        <span className="stage-spinner" />
+                      ) : null}
                     </span>
-                    <span className="stage-label">{label}</span>
+                    <span className="stage-label">
+                      {state.status === 'active' ? label.replace(/…$/, '') : label}
+                      {state.status === 'active' && (
+                        <span className="stage-dots" aria-hidden="true">
+                          <i />
+                          <i />
+                          <i />
+                        </span>
+                      )}
+                    </span>
                   </li>
                 )
               })}
@@ -374,6 +390,7 @@ export function UploadPage() {
           </>
         )}
       </div>
+      <CompanyByline />
     </main>
   )
 }

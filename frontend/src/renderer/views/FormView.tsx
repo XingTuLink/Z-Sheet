@@ -64,7 +64,7 @@ function FormControl({
 }
 
 export function FormView({ view }: { view: FormViewModel }) {
-  const { bootstrap, records, saveRecord } = useRuntime()
+  const { bootstrap, records, readOnly, saveRecord } = useRuntime()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const { basePath } = resolveAppRoute(useLocation().pathname)
@@ -106,6 +106,17 @@ export function FormView({ view }: { view: FormViewModel }) {
         <div className="card">
           <h1>模型配置有误</h1>
           <p className="muted">表单视图 {view.key} 引用了不存在的实体。</p>
+        </div>
+      </section>
+    )
+  }
+
+  if (readOnly) {
+    return (
+      <section className="view">
+        <div className="card">
+          <h1>只读页面</h1>
+          <p className="muted">这是公开发布的系统，仅支持浏览，不能新增或编辑记录。</p>
         </div>
       </section>
     )

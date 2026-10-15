@@ -25,6 +25,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from backend.domain.enums import FieldRole
 from backend.domain.models import BusinessField, BusinessModel, FieldType
 from backend.ingestion.parser import ParseError, parse_workbook
 from backend.ingestion.schemas import Cell
@@ -45,6 +46,12 @@ WORKSPACE_APP_KEY = "workspace"
 CONFIRM_OPERATOR = "confirm"
 
 _CURRENCY_CHARS_RE = re.compile(r"[¥￥$€￠£,\s]|元|块")
+
+# Wrapped enum cells embed line breaks / stray spaces ("AI 智能体\n开发"),
+# while the LLM proposes the clean label ("AI 智能体开发"). Compare with ALL
+# whitespace removed so cosmetic cell layout never rejects a record; the
+# canonical model value is written back.
+_ENUM_WHITESPACE_RE = re.compile(r"\s+", flags=re.UNICODE)
 
 # ISO 8601 reduced-precision dates inside an already-accepted date column:
 # a bare year/year-month names a whole period, anchored to its first day.
@@ -196,6 +203,27 @@ def _normalize_date(text: str, where: str) -> str:
     )
 
 
+def _coerce_enum_value(field: BusinessField, text: str) -> str:
+    """Map a raw enum cell onto one of the model's allowed values.
+
+    Exact match wins; otherwise whitespace-insensitive matching tolerates
+    wrapped/aligned cells. With zero or several candidates the raw text is
+    returned so validate_records raises the standard actionable error.
+    """
+    allowed = field.values or []
+    if text in allowed:
+        return text
+    compact = _ENUM_WHITESPACE_RE.sub("", text)
+    matches = [
+        value
+        for value in allowed
+        if _ENUM_WHITESPACE_RE.sub("", value) == compact
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    return text
+
+
 def _coerce_cell(field: BusinessField, cell: Cell, where: str) -> Any:
     """Convert an ingested text cell into the typed value records validation expects."""
     if cell is None:
@@ -205,7 +233,9 @@ def _coerce_cell(field: BusinessField, cell: Cell, where: str) -> Any:
         return None
 
     ftype = field.type
-    if ftype in (FieldType.STRING, FieldType.PHONE, FieldType.ENUM):
+    if ftype is FieldType.ENUM:
+        return _coerce_enum_value(field, text)
+    if ftype in (FieldType.STRING, FieldType.PHONE):
         return text
     if ftype in (FieldType.NUMBER, FieldType.MONEY):
         cleaned = _CURRENCY_CHARS_RE.sub("", text)
@@ -221,6 +251,39 @@ def _coerce_cell(field: BusinessField, cell: Cell, where: str) -> Any:
     raise ConfirmError(f"{where}：暂不支持的字段类型 {ftype}")
 
 
+def _reconcile_enums_with_data(
+    model: BusinessModel,
+    observed: dict[tuple[str, str], list[str]],
+) -> None:
+    """Align data-derived enum fields with the workbook's FULL column values.
+
+    The LLM only sees the first sample rows, so a merged-layout category that
+    starts past the sample (e.g. "管理系统\\n定制" on row 24) is missing from
+    its proposed enum set. Such a value is real data, not an error: extend the
+    enum with observed labels in first-seen order. When a column turns out not
+    to be low-cardinality at all (> cap), downgrade it to free text — either
+    way generation must never be blocked by an incomplete proposal.
+    """
+    from .llm_understanding import MAX_ENUM_VALUES
+
+    for entity in model.entities:
+        for field in entity.fields:
+            if field.type is not FieldType.ENUM:
+                continue
+            extras = observed.get((entity.key, field.key))
+            if not extras:
+                continue
+            existing = field.values or []
+            merged: list[str] = list(dict.fromkeys([*existing, *extras]))
+            if len(merged) <= MAX_ENUM_VALUES:
+                field.values = merged
+            else:
+                field.type = FieldType.STRING
+                field.values = None
+                if field.role == FieldRole.ENUM:
+                    field.role = FieldRole.DIMENSION
+
+
 def extract_records(
     plans: list[EntityPlan], model: BusinessModel
 ) -> dict[str, list[dict[str, Any]]]:
@@ -233,6 +296,9 @@ def extract_records(
     """
     entities = {entity.key: entity for entity in model.entities}
     raw: dict[str, list[dict[str, Any]]] = {}
+    # New enum labels encountered in the full data, per (entity, field),
+    # in first-seen order. Used to reconcile data-derived enum sets below.
+    observed_enums: dict[tuple[str, str], list[str]] = {}
     for plan in plans:
         entity = entities[plan.key]
         field_map = {field.key: field for field in entity.fields}
@@ -243,12 +309,29 @@ def extract_records(
                 continue  # parser-aligned blank trailing row
             out: dict[str, Any] = {}
             for position, column in enumerate(sheet.columns):
-                field_key = plan.field_keys[column]
+                field = field_map[plan.field_keys[column]]
                 cell = row[position] if position < len(row) else None
                 where = f"工作表「{sheet.name}」第 {row_index + 2} 行字段「{column}」"
-                out[field_key] = _coerce_cell(field_map[field_key], cell, where)
+                value = _coerce_cell(field, cell, where)
+                if field.type is FieldType.ENUM and value is not None:
+                    # _coerce_cell maps cosmetic whitespace onto a declared
+                    # label; anything still outside the set is a category the
+                    # proposal missed — normalise its layout whitespace and
+                    # queue it for the data-driven reconciliation.
+                    if value not in (field.values or []):
+                        label = _ENUM_WHITESPACE_RE.sub("", value)
+                        bucket = observed_enums.setdefault(
+                            (plan.key, field.key), []
+                        )
+                        if label and label not in bucket:
+                            bucket.append(label)
+                        value = label
+                out[field.key] = value
             rows.append(out)
         raw[plan.key] = rows
+
+    _reconcile_enums_with_data(model, observed_enums)
+
     try:
         return validate_records(model, raw)
     except ValueError as exc:

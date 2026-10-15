@@ -106,3 +106,26 @@ class RecordMutationResponse(BaseModel):
     entity: str
     key: str
     row: dict[str, Any]
+
+
+class PublicationRequest(BaseModel):
+    """Create a publication: chosen public slug."""
+
+    slug: str = Field(..., min_length=1, max_length=64)
+
+
+class PublicationUpdateRequest(BaseModel):
+    """Change the slug, pin the newest model version, or both at once."""
+
+    slug: str | None = Field(default=None, min_length=1, max_length=64)
+    republish: bool = False
+
+
+class PublicationResponse(BaseModel):
+    app_key: str
+    slug: str
+    status: str
+    model_version: int
+    current_version: int
+    public: bool
+    published_at: datetime | None = None

@@ -8,7 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from backend.ai.provider import LLMConfig
 
-PROJECT_VERSION = "0.1.0"
+PROJECT_VERSION = "0.1.0-alpha.1"
 DEFAULT_DEV_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     llm_model: str = DEFAULT_LLM_MODEL
     llm_timeout: float = 60.0
     llm_enable_thinking: bool = True
+    # Retries beyond the first attempt; transient LLM failures fall back to
+    # the rules engine, so this stays small by design.
+    llm_max_retries: int = 1
+
+    # Root log level for the "zsheet" logger hierarchy (DEBUG/INFO/WARNING…).
+    log_level: str = "INFO"
 
     @property
     def database_url(self) -> str:
@@ -48,6 +54,7 @@ class Settings(BaseSettings):
             model=self.llm_model,
             timeout=self.llm_timeout,
             enable_thinking=self.llm_enable_thinking,
+            max_retries=self.llm_max_retries,
         )
 
 

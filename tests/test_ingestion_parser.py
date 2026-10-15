@@ -104,6 +104,54 @@ def test_xlsx_header_only_sheet_warns():
     assert any("no data rows" in warning for warning in sheet.warnings)
 
 
+def test_xlsx_vertical_merged_category_is_forward_filled():
+    # Real-world layout (栈上月明业务清单): a category cell is vertically
+    # merged across the service rows belonging to it; only the anchor cell
+    # carries the value. All covered rows must inherit it.
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "业务清单"
+    ws.append(["序号", "业务板块", "服务项目"])
+    ws.append([1, "板块甲", "客服"])
+    ws.append([2, None, "跟单"])
+    ws.append([3, None, "报表"])
+    ws.append([4, "板块乙", "官网"])
+    ws.merge_cells("B2:B4")
+    buffer = io.BytesIO()
+    wb.save(buffer)
+
+    sheet = parse_workbook("services.xlsx", buffer.getvalue()).sheets[0]
+    assert sheet.header_row_number == 1
+    assert sheet.rows == [
+        ["1", "板块甲", "客服"],
+        ["2", "板块甲", "跟单"],
+        ["3", "板块甲", "报表"],
+        ["4", "板块乙", "官网"],
+    ]
+
+
+def test_xlsx_horizontal_merged_banner_is_not_filled_into_data():
+    # Title/annotation rows are horizontally merged; they must NOT fan out
+    # into other columns and must not become data rows.
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "清单"
+    ws.append(["公司宣传大标题", None, None])
+    ws.append(["序号", "板块", "服务"])
+    ws.append([1, "板块甲", "客服"])
+    ws.merge_cells("A1:C1")
+    buffer = io.BytesIO()
+    wb.save(buffer)
+
+    sheet = parse_workbook("banner.xlsx", buffer.getvalue()).sheets[0]
+    assert sheet.header_row_number == 2
+    assert sheet.columns == ["序号", "板块", "服务"]
+    assert sheet.rows == [["1", "板块甲", "客服"]]
+    assert sheet.data_row_count == 1
+
+
 def test_xlsx_unnamed_and_duplicate_headers_warn():
     content = make_xlsx_bytes(
         {

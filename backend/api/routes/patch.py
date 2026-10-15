@@ -31,6 +31,7 @@ from backend.api.schemas import (
     VersionDetail,
 )
 from backend.config import get_settings
+from backend.logging_config import get_logger
 from backend.patch.apply import PatchError
 from backend.patch.explain import explain_intents
 from backend.patch.generator import PatchGenerationError, generate_patches
@@ -40,6 +41,8 @@ from backend.storage.repositories import model_repository as repo
 from backend.storage.repositories import patch_session_repository as sessions
 
 router = APIRouter(prefix="/api/v1/models/{app_key}/patch-sessions", tags=["patch"])
+
+logger = get_logger("patch")
 
 
 def get_chat_client() -> ChatClient:
@@ -78,13 +81,18 @@ def preview_patch(
         result = parse_intents(model, text, client)
         plan = generate_patches(model, result)
     except LLMConfigError as exc:
+        logger.warning("Patch 预览被拒绝：LLM 未配置（app=%s）：%s", app_key, exc)
         return JSONResponse(status_code=503, content={"detail": str(exc)})
     except LLMCallError as exc:
+        logger.warning(
+            "Patch 预览 LLM 调用失败（app=%s，已按重试预算耗尽）：%s", app_key, exc
+        )
         return JSONResponse(
             status_code=503,
             content={"detail": f"语义理解服务暂时不可用：{exc}"},
         )
     except ValueError as exc:  # malformed structured output from the LLM
+        logger.warning("Patch 预览 LLM 输出无法解析（app=%s）：%s", app_key, exc)
         return JSONResponse(
             status_code=502,
             content={"detail": f"意图解析失败，请重试。{exc}"},
@@ -190,10 +198,18 @@ def confirm_patch(
         # The identical ops+snapshot pair passed three-layer validation at
         # preview time, so this path should be unreachable; never surface a
         # raw 500 if it is.
+        logger.warning("补丁确认后应用失败（app=%s）：%s", app_key, exc)
         return JSONResponse(
             status_code=422,
             content={"detail": f"补丁应用失败，请重新生成预览：{exc}"},
         )
+    logger.info(
+        "补丁已应用：app=%s v%d→v%d（session=%s）",
+        app_key,
+        record.base_version,
+        new_record.version,
+        session_id,
+    )
     return _version_detail(new_record)
 
 

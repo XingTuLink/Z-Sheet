@@ -168,7 +168,7 @@ function Pager({
 }
 
 export function ListView({ view }: { view: ListViewModel }) {
-  const { bootstrap, records } = useRuntime()
+  const { bootstrap, records, readOnly } = useRuntime()
   const location = useLocation()
   const { basePath } = resolveAppRoute(location.pathname)
   const model = bootstrap.model
@@ -257,7 +257,7 @@ export function ListView({ view }: { view: ListViewModel }) {
             {filtered ? `筛出 ${result.total} 条 / 共 ${allRows.length} 条` : `共 ${allRows.length} 条记录`}
           </p>
         </div>
-        {formView && (
+        {formView && !readOnly && (
           <Link className="btn btn-primary" to={`${basePath}/views/${formView.key}`}>
             新增{entity.name}
           </Link>
@@ -357,7 +357,7 @@ export function ListView({ view }: { view: ListViewModel }) {
                     </th>
                   )
                 })}
-                {formView && <th className="row-action-head">操作</th>}
+                {formView && !readOnly && <th className="row-action-head">操作</th>}
               </tr>
             </thead>
             <tbody>
@@ -389,7 +389,7 @@ export function ListView({ view }: { view: ListViewModel }) {
                         </td>
                       )
                     })}
-                    {formView && (
+                    {formView && !readOnly && (
                       <td className="row-action-cell">
                         <Link
                           className="row-link"

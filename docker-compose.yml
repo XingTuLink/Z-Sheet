@@ -5,7 +5,10 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.backend
-    image: zsheet-backend:dev
+    # ZSHEET_VERSION (e.g. 0.1.0-alpha.1) can be set to tag release images;
+    # defaults to the local "dev" tag.
+    image: zsheet-backend:${ZSHEET_VERSION:-dev}
+    restart: unless-stopped
     ports:
       - "8000:8000"
     # Local, gitignored configuration (ZSHEET_LLM_API_KEY / base_url / model;
@@ -17,6 +20,12 @@ services:
       ZSHEET_DATA_DIR: /app/data
     volumes:
       - zsheet-data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,urllib.request,sys; r=json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)); sys.exit(0 if r.get('status') == 'ok' else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
 
 volumes:
   zsheet-data:

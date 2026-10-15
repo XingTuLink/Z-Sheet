@@ -187,7 +187,6 @@ export function DashboardView({ view }: { view: DashboardViewModel }) {
       <header className="view-header">
         <div>
           <h1>{view.title}</h1>
-          <p className="view-sub">由已确认模型和当前数据自动计算</p>
         </div>
       </header>
       <MetricCards view={view} />
