@@ -139,6 +139,7 @@ function CreateForm({
       await queryClient.invalidateQueries({ queryKey: ['publication', appKey] })
     } catch (err) {
       setError(failMessage(err, '发布失败，请稍后重试'))
+    } finally {
       setBusy(false)
     }
   }
@@ -234,6 +235,7 @@ function PublishedForm({
       await refresh()
     } catch (err) {
       setError(failMessage(err, '保存失败，请稍后重试'))
+    } finally {
       setBusy(false)
     }
   }
@@ -246,6 +248,7 @@ function PublishedForm({
       await refresh()
     } catch (err) {
       setError(failMessage(err, '更新发布失败，请稍后重试'))
+    } finally {
       setBusy(false)
     }
   }
@@ -262,6 +265,7 @@ function PublishedForm({
       await refresh()
     } catch (err) {
       setError(failMessage(err, '下线失败，请稍后重试'))
+    } finally {
       setBusy(false)
     }
   }

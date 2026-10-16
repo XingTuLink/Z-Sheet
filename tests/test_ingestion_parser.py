@@ -131,6 +131,29 @@ def test_xlsx_vertical_merged_category_is_forward_filled():
     ]
 
 
+def test_xlsx_merged_anchor_line_breaks_are_collapsed():
+    # The anchor of a vertical category merge visually wraps with an
+    # in-cell newline ("AI 智能体\n开发"); both the anchor row and the
+    # filled rows must carry the same single-line enum value.
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "业务清单"
+    ws.append(["序号", "业务板块", "服务项目"])
+    ws.append([1, "AI 智能体\n开发", "客服"])
+    ws.append([2, None, "跟单"])
+    ws.append([3, "普通板块\n保留换行", "推荐"])
+    ws.merge_cells("B2:B3")  # vertical merge on the wrapped anchor only
+    buffer = io.BytesIO()
+    wb.save(buffer)
+
+    sheet = parse_workbook("services.xlsx", buffer.getvalue()).sheets[0]
+    assert sheet.rows[0][:2] == ["1", "AI 智能体开发"]
+    assert sheet.rows[1][:2] == ["2", "AI 智能体开发"]
+    # Non-merged cells keep their interior newlines untouched.
+    assert sheet.rows[2][1] == "普通板块\n保留换行"
+
+
 def test_xlsx_horizontal_merged_banner_is_not_filled_into_data():
     # Title/annotation rows are horizontally merged; they must NOT fan out
     # into other columns and must not become data rows.

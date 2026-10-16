@@ -10,7 +10,7 @@ import {
   type UnderstandingResult,
 } from '../api/ingestion'
 import { setLastUploadedFile } from '../api/sessionStore'
-import { BrandLockup, CompanyByline } from '../components/Brand'
+import { BrandLockup, CompanyFooter } from '../components/Brand'
 
 type Phase = 'idle' | 'working' | 'done' | 'error'
 type StageState = 'pending' | 'active' | 'done'
@@ -390,7 +390,7 @@ export function UploadPage() {
           </>
         )}
       </div>
-      <CompanyByline />
+      <CompanyFooter />
     </main>
   )
 }

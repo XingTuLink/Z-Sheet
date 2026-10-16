@@ -102,17 +102,29 @@ def _parse_xlsx(content: bytes) -> list[ParsedSheet]:
             # the anchor value into the covered rows. Horizontal merges
             # (titles, annotation/contact banners) stay untouched so the
             # blank/annotation row filters keep treating them as non-data.
-            vertical_fills: list[tuple[int, int, int, Cell]] = []
+            vertical_fills: list[tuple[int, int, int, str, str]] = []
             for merged in worksheet.merged_cells.ranges:
                 if merged.min_col != merged.max_col or merged.min_row >= merged.max_row:
                     continue
-                anchor = _cell_to_text(
+                raw_anchor = _cell_to_text(
                     worksheet.cell(merged.min_row, merged.min_col).value
                 )
-                if anchor:
-                    vertical_fills.append(
-                        (merged.min_col, merged.min_row + 1, merged.max_row, anchor)
-                    )
+                if raw_anchor:
+                    # In-cell line breaks inside a merged category label are
+                    # purely visual wrapping ("AI 智能体\\n开发"); collapse them
+                    # so enum profiling sees one consistent value across the
+                    # anchor and the filled rows.
+                    anchor = re.sub(r"\s*[\r\n]+\s*", "", raw_anchor).strip()
+                    if anchor:
+                        vertical_fills.append(
+                            (
+                                merged.min_col,
+                                merged.min_row,
+                                merged.max_row,
+                                raw_anchor,
+                                anchor,
+                            )
+                        )
 
             rows: list[list[Cell]] = []
             for row in worksheet.iter_rows(values_only=True):
@@ -122,11 +134,16 @@ def _parse_xlsx(content: bytes) -> list[ParsedSheet]:
                         f"sheet {worksheet.title!r} exceeds {MAX_RAW_ROWS} raw rows"
                     )
 
-            # Coordinates are 1-based; rows list is 0-based. Only fill cells
-            # that are empty, never overwrite explicit values.
-            for col, row_start, row_end, value in vertical_fills:
+            # Coordinates are 1-based; rows list is 0-based. Normalize the
+            # anchor cell itself, then fill empty covered cells, never
+            # overwriting explicit values.
+            for col, anchor_row, row_end, raw_anchor, anchor in vertical_fills:
                 col_idx = col - 1
-                for row_no in range(row_start, row_end + 1):
+                anchor_idx = anchor_row - 1
+                if 0 <= anchor_idx < len(rows) and col_idx < len(rows[anchor_idx]):
+                    if rows[anchor_idx][col_idx] == raw_anchor:
+                        rows[anchor_idx][col_idx] = anchor
+                for row_no in range(anchor_row + 1, row_end + 1):
                     row_idx = row_no - 1
                     if not (0 <= row_idx < len(rows)):
                         continue
@@ -134,7 +151,7 @@ def _parse_xlsx(content: bytes) -> list[ParsedSheet]:
                     if col_idx >= len(cells):
                         cells.extend([None] * (col_idx + 1 - len(cells)))
                     if cells[col_idx] is None:
-                        cells[col_idx] = value
+                        cells[col_idx] = anchor
 
             sheets.append(_build_sheet(worksheet.title, rows))
     finally:

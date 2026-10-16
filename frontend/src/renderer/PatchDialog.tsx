@@ -31,6 +31,87 @@ const EXAMPLES = [
   '在客户里加一个微信号文本字段',
 ]
 
+interface PatchHistoryEntry {
+  text: string
+  at: number
+  confirmed: boolean
+}
+
+const HISTORY_LIMIT = 10
+
+function draftKey(appKey: string) {
+  return `zsheet:patch:draft:${appKey}`
+}
+
+function historyStorageKey(appKey: string) {
+  return `zsheet:patch:history:${appKey}`
+}
+
+function readDraft(appKey: string): string {
+  try {
+    return localStorage.getItem(draftKey(appKey)) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function writeDraft(appKey: string, text: string) {
+  try {
+    if (text) localStorage.setItem(draftKey(appKey), text)
+    else localStorage.removeItem(draftKey(appKey))
+  } catch {
+    // Storage unavailable (private mode) — history just won't persist.
+  }
+}
+
+function readHistory(appKey: string): PatchHistoryEntry[] {
+  try {
+    const raw = localStorage.getItem(historyStorageKey(appKey))
+    if (!raw) return []
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .filter(
+        (item): item is PatchHistoryEntry =>
+          typeof item === 'object' &&
+          item !== null &&
+          typeof (item as PatchHistoryEntry).text === 'string' &&
+          typeof (item as PatchHistoryEntry).at === 'number',
+      )
+      .slice(0, HISTORY_LIMIT)
+  } catch {
+    return []
+  }
+}
+
+function writeHistory(appKey: string, entries: PatchHistoryEntry[]) {
+  try {
+    localStorage.setItem(historyStorageKey(appKey), JSON.stringify(entries))
+  } catch {
+    // Storage unavailable — ignore.
+  }
+}
+
+function rememberRequest(
+  appKey: string,
+  text: string,
+  confirmed: boolean,
+): PatchHistoryEntry[] {
+  const existing = readHistory(appKey).filter((entry) => entry.text !== text)
+  const next = [{ text, at: Date.now(), confirmed }, ...existing].slice(
+    0,
+    HISTORY_LIMIT,
+  )
+  writeHistory(appKey, next)
+  return next
+}
+
+function formatHistoryTime(at: number): string {
+  const date = new Date(at)
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
 interface PatchDialogProps {
   open: boolean
   appKey: string
@@ -41,23 +122,42 @@ interface PatchDialogProps {
 export function PatchDialog({ open, appKey, basePath, onClose }: PatchDialogProps) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
-  const [text, setText] = useState('')
+  const [text, setText] = useState(() => readDraft(appKey))
+  const [history, setHistory] = useState<PatchHistoryEntry[]>(() =>
+    readHistory(appKey),
+  )
   const [preview, setPreview] = useState<PatchPreview | null>(null)
   const [generating, setGenerating] = useState(false)
   const [deciding, setDeciding] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Re-sync from storage whenever the dialog opens (render-phase adjustment,
+  // the sanctioned alternative to setState inside an effect).
+  const [wasOpen, setWasOpen] = useState(open)
+  if (open !== wasOpen) {
+    setWasOpen(open)
+    if (open) {
+      setText(readDraft(appKey))
+      setHistory(readHistory(appKey))
+    }
+  }
+
   if (!open) return null
 
   const busy = generating || deciding
 
-  const resetAndClose = () => {
-    setText('')
+  // Closing only dismisses the preview; the typed draft stays stored.
+  const closeShell = () => {
     setPreview(null)
     setGenerating(false)
     setDeciding(false)
     setError(null)
     onClose()
+  }
+
+  const updateText = (next: string) => {
+    setText(next)
+    writeDraft(appKey, next)
   }
 
   const failMessage = (err: unknown, fallback: string) =>
@@ -72,7 +172,9 @@ export function PatchDialog({ open, appKey, basePath, onClose }: PatchDialogProp
     setGenerating(true)
     setError(null)
     try {
-      setPreview(await previewPatch(appKey, sentence))
+      const result = await previewPatch(appKey, sentence)
+      setPreview(result)
+      setHistory(rememberRequest(appKey, sentence, false))
     } catch (err) {
       setError(failMessage(err, '生成修改预览失败，请稍后重试'))
     } finally {
@@ -82,13 +184,16 @@ export function PatchDialog({ open, appKey, basePath, onClose }: PatchDialogProp
 
   const handleConfirm = async () => {
     if (!preview) return
+    const sentence = text.trim()
     setDeciding(true)
     setError(null)
     try {
       await confirmPatch(appKey, preview.session_id)
+      setHistory(rememberRequest(appKey, sentence, true))
+      updateText('')
       await queryClient.invalidateQueries({ queryKey: ['bootstrap', appKey] })
       navigate(basePath)
-      resetAndClose()
+      closeShell()
     } catch (err) {
       setError(failMessage(err, '提交失败，请稍后重试'))
       setDeciding(false)
@@ -113,7 +218,12 @@ export function PatchDialog({ open, appKey, basePath, onClose }: PatchDialogProp
     if (preview?.actionable) {
       void rejectPatch(appKey, preview.session_id).catch(() => undefined)
     }
-    resetAndClose()
+    closeShell()
+  }
+
+  const clearHistory = () => {
+    writeHistory(appKey, [])
+    setHistory([])
   }
 
   return (
@@ -150,7 +260,7 @@ export function PatchDialog({ open, appKey, basePath, onClose }: PatchDialogProp
               maxLength={500}
               rows={4}
               placeholder="描述你想怎么调整，例如：客户列表加一个按负责人筛选"
-              onChange={(event) => setText(event.target.value)}
+              onChange={(event) => updateText(event.target.value)}
             />
             <div className="patch-examples">
               {EXAMPLES.map((example) => (
@@ -158,13 +268,55 @@ export function PatchDialog({ open, appKey, basePath, onClose }: PatchDialogProp
                   key={example}
                   type="button"
                   className="patch-example"
-                  onClick={() => setText(example)}
+                  onClick={() => updateText(example)}
                   disabled={busy}
                 >
                   {example}
                 </button>
               ))}
             </div>
+            {history.length > 0 && (
+              <div className="patch-history">
+                <div className="patch-history-head">
+                  <span>最近提过的修改</span>
+                  <button
+                    type="button"
+                    className="patch-history-clear"
+                    onClick={clearHistory}
+                    disabled={busy}
+                  >
+                    清空
+                  </button>
+                </div>
+                <ul className="patch-history-list">
+                  {history.map((entry) => (
+                    <li key={`${entry.at}-${entry.text.slice(0, 8)}`}>
+                      <button
+                        type="button"
+                        className="patch-history-item"
+                        onClick={() => updateText(entry.text)}
+                        disabled={busy}
+                        title={entry.text}
+                      >
+                        <span className="patch-history-text">{entry.text}</span>
+                        <span className="patch-history-meta">
+                          <span
+                            className={
+                              entry.confirmed
+                                ? 'patch-history-badge is-confirmed'
+                                : 'patch-history-badge'
+                            }
+                          >
+                            {entry.confirmed ? '已生效' : '未确认'}
+                          </span>
+                          <time>{formatHistoryTime(entry.at)}</time>
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </>
         ) : (
           <div className="patch-body">
@@ -236,7 +388,7 @@ export function PatchDialog({ open, appKey, basePath, onClose }: PatchDialogProp
               <button
                 type="button"
                 className="btn btn-secondary"
-                onClick={resetAndClose}
+                onClick={closeShell}
                 disabled={busy}
               >
                 取消

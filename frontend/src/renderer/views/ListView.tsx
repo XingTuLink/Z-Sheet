@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type CSSProperties } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 
 import { formatCell } from '../format'
@@ -316,7 +316,15 @@ export function ListView({ view }: { view: ListViewModel }) {
         </div>
       )}
 
-      <div className="card grid-card">
+      <div
+        className="card grid-card"
+        data-paged={result.total > 0 ? 'true' : undefined}
+        style={
+          result.total > 0
+            ? ({ '--grid-rows': pageSize } as CSSProperties)
+            : undefined
+        }
+      >
         {result.total === 0 ? (
           <EmptyState>
             {filtered ? (
@@ -367,24 +375,29 @@ export function ListView({ view }: { view: ListViewModel }) {
                   <tr key={rowKey}>
                     {columns.map(({ key, field }) => {
                       const value = row[key]
+                      const text = formatCell(field, value)
+                      const title =
+                        value === null || value === undefined || value === ''
+                          ? undefined
+                          : text
                       if (key === entity.key_field && detailView) {
                         return (
-                          <td key={key}>
+                          <td key={key} title={title}>
                             <Link
                               className="row-link"
                               to={`${basePath}/views/${detailView.key}?id=${encodeURIComponent(String(value ?? ''))}`}
                             >
-                              {formatCell(field, value)}
+                              {text}
                             </Link>
                           </td>
                         )
                       }
                       return (
-                        <td key={key}>
+                        <td key={key} title={title}>
                           {field.type === 'enum' && value ? (
-                            <span className="tag">{formatCell(field, value)}</span>
+                            <span className="tag">{text}</span>
                           ) : (
-                            formatCell(field, value)
+                            text
                           )}
                         </td>
                       )

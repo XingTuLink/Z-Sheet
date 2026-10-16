@@ -60,6 +60,14 @@ a:hover {
   padding: 24px;
 }
 
+/* Full-width footer pinned to the bottom of the gate/upload screens. */
+.gate > .app-footer {
+  width: auto;
+  align-self: stretch;
+  margin: auto -24px -24px;
+  flex-shrink: 0;
+}
+
 .gate-card {
   width: 420px;
   max-width: 100%;
@@ -170,7 +178,75 @@ a:hover {
 }
 
 .content {
+  flex: 1;
   padding: 28px;
+}
+
+.app-footer {
+  margin-top: auto;
+  border-top: 1px solid var(--color-line);
+  background: #fff;
+}
+
+.app-footer-inner {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 14px 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--color-muted);
+}
+
+.app-footer-product {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.app-footer-product img {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+}
+
+.app-footer-dot {
+  margin: 0 2px;
+  opacity: 0.6;
+}
+
+.app-footer-company {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-muted);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.app-footer-company:hover {
+  color: var(--color-primary);
+}
+
+.app-footer-ext {
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+@media (max-width: 640px) {
+  .app-footer-inner {
+    flex-direction: column;
+    gap: 6px;
+    text-align: center;
+  }
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
 /* ---------- view scaffolding ---------- */
@@ -277,9 +353,18 @@ a:hover {
   overflow: hidden;
 }
 
+/* Reserve the full page's height so flipping pages never makes the table
+   jump shorter (wrapped rows / a half-filled last page used to reflow it). */
+.grid-card[data-paged='true'] {
+  min-height: calc(41px + var(--grid-rows, 10) * 44px);
+}
+
 .grid {
   width: 100%;
   border-collapse: collapse;
+  /* Fixed layout keeps column widths identical across pages regardless of
+     how long the values on each page are. */
+  table-layout: fixed;
 }
 
 .grid th {
@@ -291,12 +376,28 @@ a:hover {
   padding: 10px 14px;
   border-bottom: 1px solid var(--color-border);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  height: 40px;
+  box-sizing: border-box;
 }
 
 .grid td {
-  padding: 11px 14px;
+  padding: 0 14px;
   border-bottom: 1px solid var(--color-line);
   vertical-align: middle;
+  height: 44px;
+  box-sizing: border-box;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The action column keeps a fixed width; data columns share the rest. */
+.grid .row-action-head,
+.grid .row-action-cell {
+  width: 72px;
+  text-align: right;
 }
 
 .grid tbody tr:last-child td {
@@ -309,6 +410,10 @@ a:hover {
 
 .row-link {
   font-weight: 600;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tag {
@@ -1828,10 +1933,13 @@ a:hover {
 
 .bar-chart {
   display: flex;
-  align-items: flex-end;
+  /* Stretch (not flex-end): each column must fill the chart height so the
+     tracks get a definite pixel height — otherwise the fills' percentage
+     heights collapse to their 4px min-height. */
+  align-items: stretch;
   gap: 18px;
-  min-height: 220px;
-  padding: 18px 20px 16px;
+  height: 240px;
+  padding: 26px 20px 16px;
   border-top: 1px solid var(--color-line);
 }
 
@@ -1842,12 +1950,16 @@ a:hover {
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  height: 100%;
 }
 
 .bar-value {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  transform: translateX(-50%);
   color: var(--color-text);
   font-size: 12px;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -1859,14 +1971,16 @@ a:hover {
   align-items: flex-end;
   border-radius: 6px 6px 0 0;
   background: var(--color-head);
-  overflow: hidden;
+  overflow: visible;
 }
 
 .bar-fill {
+  position: relative;
   width: 100%;
   min-height: 4px;
   border-radius: 6px 6px 0 0;
   background: linear-gradient(180deg, #5bbcff 0%, var(--color-primary) 100%);
+  transition: height 0.4s ease;
 }
 
 .bar-label {
@@ -1884,9 +1998,9 @@ a:hover {
 
 .distribution-row {
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr) 40px;
+  grid-template-columns: minmax(88px, 11em) minmax(0, 1fr) 40px;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   font-size: 13px;
 }
 
@@ -1894,6 +2008,11 @@ a:hover {
 .distribution-count {
   color: var(--color-text);
   white-space: nowrap;
+}
+
+.distribution-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .distribution-count {
@@ -1941,6 +2060,175 @@ a:hover {
   padding: 0 14px;
   font-size: 13px;
   margin-right: 8px;
+}
+
+/* Floating logo ball that opens the one-sentence patch dialog. */
+.patch-fab {
+  cursor: pointer;
+  z-index: 900;
+  background: linear-gradient(135deg, #39adff 0%, #d8dde1 100%);
+  border: none;
+  border-radius: 50%;
+  justify-content: center;
+  align-items: center;
+  width: 58px;
+  height: 58px;
+  padding: 0;
+  transition: transform 0.18s, box-shadow 0.18s;
+  display: flex;
+  position: fixed;
+  bottom: 28px;
+  right: 28px;
+  box-shadow: 0 10px 28px #0e8ce66b;
+}
+
+.patch-fab img {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: block;
+}
+
+.patch-fab:hover {
+  transform: translateY(-2px) scale(1.06);
+  box-shadow: 0 14px 34px rgba(14, 140, 230, 0.5);
+}
+
+.patch-fab:active {
+  transform: scale(0.96);
+}
+
+.patch-fab:focus-visible {
+  outline: 3px solid var(--color-primary-line);
+  outline-offset: 2px;
+}
+
+/* Soft pulsing halo so the entry is discoverable. */
+.patch-fab-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(34, 160, 255, 0.55);
+  animation: patch-fab-pulse 2.6s ease-out infinite;
+  pointer-events: none;
+}
+
+@keyframes patch-fab-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  70% {
+    transform: scale(1.45);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.45);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .patch-fab-ring {
+    animation: none;
+  }
+}
+
+/* Persisted request history inside the patch dialog. */
+.patch-history {
+  margin-top: 14px;
+  border-top: 1px solid var(--color-line);
+  padding-top: 12px;
+}
+
+.patch-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--color-muted);
+  margin-bottom: 8px;
+}
+
+.patch-history-clear {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 12px;
+  color: var(--color-muted);
+  cursor: pointer;
+}
+
+.patch-history-clear:hover {
+  color: var(--color-danger);
+}
+
+.patch-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 168px;
+  overflow-y: auto;
+}
+
+.patch-history-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  background: var(--color-head);
+  padding: 7px 10px;
+  cursor: pointer;
+  text-align: left;
+  font-size: 12.5px;
+  color: var(--color-text);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.patch-history-item:hover {
+  border-color: var(--color-primary-line);
+  background: var(--color-primary-soft);
+}
+
+.patch-history-item:disabled {
+  cursor: default;
+}
+
+.patch-history-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.patch-history-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  color: var(--color-muted);
+  font-size: 11.5px;
+}
+
+.patch-history-badge {
+  border: 1px solid var(--color-line);
+  color: var(--color-muted);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.patch-history-badge.is-confirmed {
+  border-color: var(--color-primary-line);
+  background: var(--color-primary-soft);
+  color: var(--color-primary-hover);
 }
 
 .patch-overlay {
