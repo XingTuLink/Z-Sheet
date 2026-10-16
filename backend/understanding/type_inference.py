@@ -27,6 +27,7 @@ from .keywords import (
     PHONE_NAME_KEYWORDS,
     has_keyword,
 )
+from .missing_values import is_missing_token
 from .schemas import CONFIDENCE_HIGH, InferredField, SheetProfile
 
 _CURRENCY_CHARS = "¥￥$€￠£"
@@ -46,6 +47,15 @@ _DATE_FORMATS = (
     "%Y/%m/%d",
     "%Y.%m.%d",
     "%Y年%m月%d日",
+)
+
+# Partial dates that confirmation._normalize_date accepts: year-only and
+# year-month. The 1900-2199 window keeps 4-digit codes (1001, 2049...) from
+# being swallowed as years.
+_PARTIAL_DATE_RES = (
+    re.compile(r"^(?:19|20|21)\d{2}$"),
+    re.compile(r"^(?:19|20|21)\d{2}[-/.]\d{1,2}$"),
+    re.compile(r"^(?:19|20|21)\d{2}年\d{1,2}月?$"),
 )
 
 ENUM_MAX_DISTINCT = 20
@@ -79,7 +89,7 @@ def is_date(value: str) -> bool:
             return True
         except ValueError:
             continue
-    return False
+    return any(pattern.match(text) for pattern in _PARTIAL_DATE_RES)
 
 
 def _ratio(matches: int, total: int) -> float:
@@ -233,38 +243,30 @@ def infer_field(
 def infer_sheet(sheet: ParsedSheet, profile: SheetProfile) -> list[InferredField]:
     """Infer every column using the Day 6 profile.
 
-    Format evidence comes from the deterministic sample; cardinality from the
-    profile. Exact enum candidate sets require a full-column scan, so that
-    scan happens only for columns already passing the enum distribution gate.
+    Format evidence comes from the deterministic sample; cardinality from a
+    full-column scan. Conventional missing-value markers ("not provided",
+    "Not found", "无"...) are treated as null everywhere here, so they neither
+    dilute type ratios nor leak into enum candidate sets.
     """
     width = len(sheet.columns)
-    profile_by_name = {column.name: column for column in profile.columns}
 
-    enum_candidates: dict[int, list[str]] = {}
-    for pos in range(width):
-        stats = profile_by_name.get(sheet.columns[pos])
-        if stats is None:
-            continue
-        fits = (
-            stats.non_null_count >= ENUM_MIN_NON_NULL
-            and stats.distinct_count <= ENUM_MAX_DISTINCT
-            and stats.distinct_count / stats.non_null_count <= ENUM_MAX_RATIO
-        )
-        if fits:
-            values: set[str] = set()
-            for row in sheet.rows:
-                if pos >= len(row):
-                    continue
-                value = row[pos]
-                if value is not None:
-                    values.add(value)
-            enum_candidates[pos] = sorted(values)
+    # Full-column scan with missing markers excluded from the effective
+    # population (kept out of enum sets and cardinality figures).
+    effective_values: dict[int, set[str]] = {}
+    for row in sheet.rows:
+        for pos in range(width):
+            value = row[pos] if pos < len(row) else None
+            if is_missing_token(value):
+                continue
+            effective_values.setdefault(pos, set()).add(value)  # type: ignore[arg-type]
 
     results: list[InferredField] = []
     for pos, column in enumerate(sheet.columns):
-        stats = profile_by_name.get(column)
+        stats = next((c for c in profile.columns if c.name == column), None)
         sample_values: list[Cell] = [
-            row[pos] if pos < len(row) else None for row in profile.sample_rows
+            None if is_missing_token(row[pos] if pos < len(row) else None)
+            else (row[pos] if pos < len(row) else None)
+            for row in profile.sample_rows
         ]
         if stats is None:
             results.append(
@@ -274,13 +276,19 @@ def infer_sheet(sheet: ParsedSheet, profile: SheetProfile) -> list[InferredField
                 )
             )
             continue
+        values_set = effective_values.get(pos, set())
+        effective_non_null = sum(
+            1
+            for row in sheet.rows
+            if pos < len(row) and not is_missing_token(row[pos])
+        )
         results.append(
             infer_field(
                 column=column,
                 values=sample_values,
-                distinct_count=stats.distinct_count,
-                non_null_total=stats.non_null_count,
-                enum_values=enum_candidates.get(pos, []),
+                distinct_count=len(values_set),
+                non_null_total=effective_non_null,
+                enum_values=sorted(values_set) if len(values_set) <= ENUM_MAX_DISTINCT else [],
             )
         )
     return results
