@@ -190,6 +190,82 @@ def test_xlsx_unnamed_and_duplicate_headers_warn():
     assert any("duplicate" in warning for warning in sheet.warnings)
 
 
+def test_xlsx_two_row_grouped_header_prefixes_duplicate_children():
+    # Real layout: two groups share a repeated child name; the group label
+    # disambiguates 收款信息_金额 / 退款信息_金额 instead of two bare 金额.
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "对账"
+    ws.append(["收款信息", None, "退款信息", None])
+    ws.append(["日期", "金额", "日期", "金额"])
+    ws.append(["2026-01-01", 100, "2026-01-02", 50])
+    ws.merge_cells("A1:B1")
+    ws.merge_cells("C1:D1")
+    buffer = io.BytesIO()
+    wb.save(buffer)
+
+    sheet = parse_workbook("recon.xlsx", buffer.getvalue()).sheets[0]
+    assert sheet.header_row_number == 2
+    assert sheet.columns == [
+        "收款信息_日期",
+        "收款信息_金额",
+        "退款信息_日期",
+        "退款信息_金额",
+    ]
+    assert sheet.rows == [["2026-01-01", "100", "2026-01-02", "50"]]
+    assert not any("duplicate" in warning for warning in sheet.warnings)
+
+
+def test_xlsx_two_row_header_single_group_is_not_prefixed():
+    # One merged group spanning all columns is a banner, not a group row;
+    # child names stay unchanged.
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "表"
+    ws.append(["2026年度销售", None, None])
+    ws.append(["名称", "数量", "金额"])
+    ws.append(["甲", 1, 10])
+    ws.merge_cells("A1:C1")
+    buffer = io.BytesIO()
+    wb.save(buffer)
+
+    sheet = parse_workbook("single.xlsx", buffer.getvalue()).sheets[0]
+    assert sheet.header_row_number == 2
+    assert sheet.columns == ["名称", "数量", "金额"]
+
+
+def test_xlsx_formula_cells_without_cached_value_warn_and_read_empty():
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "订单"
+    ws.append(["名称", "数量", "单价", "金额"])
+    ws.append(["甲", 2, 10, "=B2*C2"])
+    ws.append(["乙", 3, 5, "=B3*C3"])
+    buffer = io.BytesIO()
+    wb.save(buffer)
+
+    sheet = parse_workbook("fx.xlsx", buffer.getvalue()).sheets[0]
+    assert [row[3] for row in sheet.rows] == [None, None]
+    assert any("formula" in warning for warning in sheet.warnings)
+
+
+def test_xlsx_fullwidth_header_is_nfkc_normalized():
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "表"
+    ws.append(["客户名称", "ＡＢＣ", "金额"])
+    ws.append(["张三", "x", 100])
+    buffer = io.BytesIO()
+    wb.save(buffer)
+
+    sheet = parse_workbook("fw.xlsx", buffer.getvalue()).sheets[0]
+    assert sheet.columns == ["客户名称", "ABC", "金额"]
+
+
 def test_ragged_rows_align_to_header_width():
     content = make_xlsx_bytes({"表": [["a", "b", "c"], ["x", "y"]]})
     sheet = parse_workbook("r.xlsx", content).sheets[0]

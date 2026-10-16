@@ -15,6 +15,7 @@ import csv
 import datetime as dt
 import io
 import re
+import unicodedata
 import zipfile
 from pathlib import Path
 from typing import Literal
@@ -95,15 +96,32 @@ def _parse_xlsx(content: bytes) -> list[ParsedSheet]:
     except (InvalidFileException, zipfile.BadZipFile, OSError, ValueError) as exc:
         raise ParseError(f"not a valid XLSX file: {exc}") from exc
 
+    # A formula cell whose result was never cached reads back as None under
+    # data_only=True (silently emptying a whole column when a writer never
+    # computed it). A cheap read-only pass locates those cells so the sheet
+    # can warn the user instead of dropping the data.
+    formula_coords = _formula_cell_coords(content)
+
     sheets: list[ParsedSheet] = []
     try:
         for worksheet in workbook.worksheets:
             # Vertical merges only (single column spanning rows): forward-fill
             # the anchor value into the covered rows. Horizontal merges
-            # (titles, annotation/contact banners) stay untouched so the
-            # blank/annotation row filters keep treating them as non-data.
+            # (titles, annotation/contact banners, two-row group headers) stay
+            # untouched so the blank/annotation row filters keep treating them
+            # as non-data; their spans are recorded for grouped-header merging.
             vertical_fills: list[tuple[int, int, int, str, str]] = []
+            horizontal_spans: dict[int, list[tuple[int, int, str]]] = {}
             for merged in worksheet.merged_cells.ranges:
+                if merged.min_row == merged.max_row and merged.min_col < merged.max_col:
+                    group_label = _cell_to_text(
+                        worksheet.cell(merged.min_row, merged.min_col).value
+                    )
+                    if group_label:
+                        horizontal_spans.setdefault(merged.min_row - 1, []).append(
+                            (merged.min_col, merged.max_col, group_label)
+                        )
+                    continue
                 if merged.min_col != merged.max_col or merged.min_row >= merged.max_row:
                     continue
                 raw_anchor = _cell_to_text(
@@ -153,10 +171,90 @@ def _parse_xlsx(content: bytes) -> list[ParsedSheet]:
                     if cells[col_idx] is None:
                         cells[col_idx] = anchor
 
-            sheets.append(_build_sheet(worksheet.title, rows))
+            formula_missing = _count_missing_formulas(
+                rows, formula_coords.get(worksheet.title, set())
+            )
+            sheets.append(
+                _build_sheet(
+                    worksheet.title,
+                    rows,
+                    horizontal_spans=horizontal_spans,
+                    formula_missing=formula_missing,
+                )
+            )
     finally:
         workbook.close()
     return sheets
+
+
+def _formula_cell_coords(content: bytes) -> dict[str, set[tuple[int, int]]]:
+    """0-based (row, col) of formula cells per sheet — best-effort.
+
+    A formula whose result was never cached reads back as None under
+    ``data_only=True``, silently emptying the cell. The scan is advisory:
+    any failure simply degrades to "no formulas detected" rather than
+    failing the whole parse.
+    """
+    try:
+        book = load_workbook(io.BytesIO(content), data_only=False, read_only=True)
+    except Exception:
+        return {}
+    try:
+        coords: dict[str, set[tuple[int, int]]] = {}
+        for worksheet in book.worksheets:
+            found: set[tuple[int, int]] = set()
+            for row_index, row in enumerate(worksheet.iter_rows()):
+                for col_index, cell in enumerate(row):
+                    if cell.data_type == "f":
+                        found.add((row_index, col_index))
+            coords[worksheet.title] = found
+        return coords
+    except Exception:
+        return {}
+    finally:
+        book.close()
+
+
+def _count_missing_formulas(
+    rows: list[list[Cell]], coords: set[tuple[int, int]]
+) -> int:
+    """Formula cells that ended up empty in the value grid."""
+    missing = 0
+    for row_index, col_index in coords:
+        if row_index >= len(rows):
+            continue
+        row = rows[row_index]
+        if col_index < len(row) and row[col_index] is None:
+            missing += 1
+    return missing
+
+
+def _normalize_header(value: str) -> str:
+    """Normalize a header label: full-width → ASCII (NFKC), then trim."""
+    return unicodedata.normalize("NFKC", value).strip()
+
+
+def _apply_group_headers(
+    columns: list[str], spans: list[tuple[int, int, str]]
+) -> list[str]:
+    """Prefix child column names with their two-row group label.
+
+    ``spans`` are 1-based ``(min_col, max_col, label)`` horizontal merges on
+    the row above the header. Unnamed placeholder columns (``column_n``) are
+    never prefixed, so a blank sub-header does not become ``组名_column_n``.
+    """
+    merged = list(columns)
+    for min_col, max_col, label in spans:
+        group = _normalize_header(label)
+        if not group:
+            continue
+        stop = min(max_col, len(merged))
+        for pos in range(min_col - 1, stop):
+            child = merged[pos]
+            if child.startswith("column_"):
+                continue
+            merged[pos] = f"{group}_{child}"
+    return merged
 
 
 # ---------- CSV ----------
@@ -305,7 +403,13 @@ def _is_annotation_row(row: list[Cell]) -> bool:
     return any(text.startswith(prefix) for prefix in _NOTE_PREFIXES)
 
 
-def _build_sheet(name: str, rows: list[list[Cell]]) -> ParsedSheet:
+def _build_sheet(
+    name: str,
+    rows: list[list[Cell]],
+    *,
+    horizontal_spans: dict[int, list[tuple[int, int, str]]] | None = None,
+    formula_missing: int = 0,
+) -> ParsedSheet:
     detection = detect_header_row(rows)
     if detection is None:
         return ParsedSheet(name=name, is_empty=True)
@@ -315,6 +419,12 @@ def _build_sheet(name: str, rows: list[list[Cell]]) -> ParsedSheet:
         raise ParseError(f"sheet {name!r} has {width} columns; limit is {MAX_COLUMNS}")
 
     warnings: list[str] = []
+    if formula_missing:
+        warnings.append(
+            f"{formula_missing} formula cell(s) had no cached result and were read as "
+            "empty; open the file in Excel and re-save it (or paste the computed "
+            "values) before uploading again"
+        )
     if detection.confidence == "low":
         warnings.append(
             f"header row {detection.row_index + 1} was detected with low confidence; "
@@ -326,13 +436,22 @@ def _build_sheet(name: str, rows: list[list[Cell]]) -> ParsedSheet:
     unnamed = 0
     for pos in range(width):
         value = raw_header[pos] if pos < len(raw_header) else None
-        if value is None:
+        header = _normalize_header(value) if value is not None else ""
+        if header:
+            columns.append(header)
+        else:
             unnamed += 1
             columns.append(f"column_{pos + 1}")
-        else:
-            columns.append(value)
     if unnamed:
         warnings.append(f"{unnamed} unnamed header column(s) generated as column_<n>")
+
+    # A two-row grouped header (e.g. 收款信息 / 退款信息 each containing a
+    # 金额 column) is disambiguated by prefixing child names with the group
+    # label. Only a genuine group row qualifies: two or more horizontal
+    # merges directly above the header; a single merged banner does not.
+    group_spans = (horizontal_spans or {}).get(detection.row_index - 1, [])
+    if len(group_spans) >= 2:
+        columns = _apply_group_headers(columns, group_spans)
 
     duplicates = sorted({col for col in columns if columns.count(col) > 1})
     if duplicates:

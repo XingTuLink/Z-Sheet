@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import secrets
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
+from sqlalchemy import CursorResult, select, update
 from sqlalchemy.orm import Session
 
 from backend.patch.intent_parser import IntentParseResult
@@ -105,12 +105,38 @@ def mark_decided(db: Session, record: PatchSessionRecord, status: str) -> None:
         raise
 
 
+def begin_confirm(db: Session, record: PatchSessionRecord) -> bool:
+    """Atomically claim a pending session: pending -> confirmed, or nobody.
+
+    Expressed as a compare-and-swap on ``status`` so two concurrent confirms
+    cannot both proceed from the same preview: exactly one caller gets a
+    ``rowcount`` of 1, the other sees False and must answer 409. The flip stays
+    uncommitted, so it rides along with the version insert in the caller's
+    transaction — and rolls back with it, leaving the session pending again if
+    the apply fails.
+    """
+    result = cast(
+        "CursorResult[Any]",
+        db.execute(
+            update(PatchSessionRecord)
+            .where(
+                PatchSessionRecord.session_id == record.session_id,
+                PatchSessionRecord.status == STATUS_PENDING,
+            )
+            .values(status=STATUS_CONFIRMED)
+            .execution_options(synchronize_session=False)
+        ),
+    )
+    return result.rowcount == 1
+
+
 __all__ = [
     "SESSION_TTL",
     "STATUS_CONFIRMED",
     "STATUS_PENDING",
     "STATUS_REJECTED",
     "PatchSessionPayload",
+    "begin_confirm",
     "create_session",
     "get_session",
     "is_expired",

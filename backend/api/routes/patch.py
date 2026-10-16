@@ -180,10 +180,16 @@ def confirm_patch(
             status_code=422, content={"detail": "本次请求没有可应用的修改"}
         )
 
-    # Flip the decision on the attached row first; apply_patch_as_new_version
-    # commits once, so the decision and the new version land atomically (its
-    # rollback on failure also restores the session to pending).
-    record.status = sessions.STATUS_CONFIRMED
+    # Claim the session atomically (pending -> confirmed, compare-and-swap on
+    # status) before touching the model: a second concurrent confirm loses the
+    # race and gets 409 instead of applying the same ops twice. The flip stays
+    # uncommitted and rides along with apply_patch_as_new_version's commit, so
+    # its rollback on failure returns the session to pending.
+    if not sessions.begin_confirm(db, record):
+        return JSONResponse(
+            status_code=409,
+            content={"detail": "该修改预览已经处理过，请勿重复提交"},
+        )
     try:
         new_record = repo.apply_patch_as_new_version(
             db,
@@ -194,6 +200,8 @@ def confirm_patch(
         )
     except repo.AppNotFoundError:
         return _not_found(app_key)
+    except repo.VersionConflictError as exc:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
     except (PatchError, PydanticValidationError, ValueError) as exc:
         # The identical ops+snapshot pair passed three-layer validation at
         # preview time, so this path should be unreachable; never surface a
