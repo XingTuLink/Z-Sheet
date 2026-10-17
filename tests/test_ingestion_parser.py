@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import io
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,6 +12,7 @@ from openpyxl import Workbook
 
 from backend.api.main import app
 from backend.api.routes import ingestion as ingestion_route
+from backend.ingestion import parser as parser_module
 from backend.ingestion.parser import (
     MAX_COLUMNS,
     MAX_DATA_ROWS,
@@ -131,6 +133,29 @@ def test_xlsx_vertical_merged_category_is_forward_filled():
     ]
 
 
+def test_xlsx_merged_anchor_line_breaks_are_collapsed():
+    # The anchor of a vertical category merge visually wraps with an
+    # in-cell newline ("AI 智能体\n开发"); both the anchor row and the
+    # filled rows must carry the same single-line enum value.
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "业务清单"
+    ws.append(["序号", "业务板块", "服务项目"])
+    ws.append([1, "AI 智能体\n开发", "客服"])
+    ws.append([2, None, "跟单"])
+    ws.append([3, "普通板块\n保留换行", "推荐"])
+    ws.merge_cells("B2:B3")  # vertical merge on the wrapped anchor only
+    buffer = io.BytesIO()
+    wb.save(buffer)
+
+    sheet = parse_workbook("services.xlsx", buffer.getvalue()).sheets[0]
+    assert sheet.rows[0][:2] == ["1", "AI 智能体开发"]
+    assert sheet.rows[1][:2] == ["2", "AI 智能体开发"]
+    # Non-merged cells keep their interior newlines untouched.
+    assert sheet.rows[2][1] == "普通板块\n保留换行"
+
+
 def test_xlsx_horizontal_merged_banner_is_not_filled_into_data():
     # Title/annotation rows are horizontally merged; they must NOT fan out
     # into other columns and must not become data rows.
@@ -165,6 +190,108 @@ def test_xlsx_unnamed_and_duplicate_headers_warn():
     assert sheet.columns == ["名称", "column_2", "名称"]
     assert any("unnamed" in warning for warning in sheet.warnings)
     assert any("duplicate" in warning for warning in sheet.warnings)
+
+
+def test_xlsx_two_row_grouped_header_prefixes_duplicate_children():
+    # Real layout: two groups share a repeated child name; the group label
+    # disambiguates 收款信息_金额 / 退款信息_金额 instead of two bare 金额.
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "对账"
+    ws.append(["收款信息", None, "退款信息", None])
+    ws.append(["日期", "金额", "日期", "金额"])
+    ws.append(["2026-01-01", 100, "2026-01-02", 50])
+    ws.merge_cells("A1:B1")
+    ws.merge_cells("C1:D1")
+    buffer = io.BytesIO()
+    wb.save(buffer)
+
+    sheet = parse_workbook("recon.xlsx", buffer.getvalue()).sheets[0]
+    assert sheet.header_row_number == 2
+    assert sheet.columns == [
+        "收款信息_日期",
+        "收款信息_金额",
+        "退款信息_日期",
+        "退款信息_金额",
+    ]
+    assert sheet.rows == [["2026-01-01", "100", "2026-01-02", "50"]]
+    assert not any("duplicate" in warning for warning in sheet.warnings)
+
+
+def test_xlsx_two_row_header_single_group_is_not_prefixed():
+    # One merged group spanning all columns is a banner, not a group row;
+    # child names stay unchanged.
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "表"
+    ws.append(["2026年度销售", None, None])
+    ws.append(["名称", "数量", "金额"])
+    ws.append(["甲", 1, 10])
+    ws.merge_cells("A1:C1")
+    buffer = io.BytesIO()
+    wb.save(buffer)
+
+    sheet = parse_workbook("single.xlsx", buffer.getvalue()).sheets[0]
+    assert sheet.header_row_number == 2
+    assert sheet.columns == ["名称", "数量", "金额"]
+
+
+def test_xlsx_formula_cells_without_cached_value_warn_and_read_empty():
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "订单"
+    ws.append(["名称", "数量", "单价", "金额"])
+    ws.append(["甲", 2, 10, "=B2*C2"])
+    ws.append(["乙", 3, 5, "=B3*C3"])
+    buffer = io.BytesIO()
+    wb.save(buffer)
+
+    sheet = parse_workbook("fx.xlsx", buffer.getvalue()).sheets[0]
+    assert [row[3] for row in sheet.rows] == [None, None]
+    assert any("formula" in warning for warning in sheet.warnings)
+
+
+def test_formula_scan_failure_is_logged_but_parse_continues(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A failing formula scan must leave a trace, not silently read no formulas.
+
+    The scan is best-effort (opens the book read-only with data_only=False);
+    the value grid uses data_only=True. Only the scan call fails here, so the
+    parse itself must still succeed while the failure shows up in the logs.
+    """
+    content = make_xlsx_bytes({"表": [["名称"], ["甲"]]})
+    real_load = parser_module.load_workbook
+
+    def flaky_load(*args: Any, **kwargs: Any) -> Any:
+        if kwargs.get("data_only") is False:
+            raise RuntimeError("模拟公式扫描打开失败")
+        return real_load(*args, **kwargs)
+
+    monkeypatch.setattr(parser_module, "load_workbook", flaky_load)
+    caplog.set_level("WARNING", logger="zsheet")
+
+    workbook = parse_workbook("scan.xlsx", content)
+
+    assert workbook.sheets[0].rows  # parsing itself is unaffected
+    assert any("公式单元格扫描" in record.getMessage() for record in caplog.records)
+
+
+def test_xlsx_fullwidth_header_is_nfkc_normalized():
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "表"
+    ws.append(["客户名称", "ＡＢＣ", "金额"])
+    ws.append(["张三", "x", 100])
+    buffer = io.BytesIO()
+    wb.save(buffer)
+
+    sheet = parse_workbook("fw.xlsx", buffer.getvalue()).sheets[0]
+    assert sheet.columns == ["客户名称", "ABC", "金额"]
 
 
 def test_ragged_rows_align_to_header_width():

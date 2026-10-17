@@ -135,13 +135,17 @@ function TrendPanel() {
       <div className="bar-chart" aria-label="按月趋势">
         {trend.points.map((point) => (
           <div className="bar-column" key={point.label}>
-            <span className="bar-value">
-              {trend.measureField
-                ? formatMoney(point.value)
-                : formatNumber(point.value)}
-            </span>
             <div className="bar-track">
-              <div className="bar-fill" style={{ height: `${Math.max(4, (point.value / max) * 100)}%` }} />
+              <div
+                className="bar-fill"
+                style={{ height: `${Math.max(4, (point.value / max) * 100)}%` }}
+              >
+                <span className="bar-value">
+                  {trend.measureField
+                    ? formatMoney(point.value)
+                    : formatNumber(point.value)}
+                </span>
+              </div>
             </div>
             <span className="bar-label">{point.label.slice(5)}</span>
           </div>
@@ -164,18 +168,25 @@ function DistributionPanel() {
         <span className="muted">{distribution.entity.name}</span>
       </div>
       <div className="distribution-list">
-        {distribution.items.map((item) => (
-          <div className="distribution-row" key={item.label}>
-            <span className="distribution-label">{item.label}</span>
-            <div className="distribution-track">
-              <div
-                className="distribution-fill"
-                style={{ width: `${Math.max(4, (item.count / max) * 100)}%` }}
-              />
+        {distribution.items.map((item) => {
+          // Values imported from vertically merged category cells may carry
+          // visual in-cell line breaks; collapse them for the axis label.
+          const label = item.label.replace(/\s*[\r\n]+\s*/g, '').trim()
+          return (
+            <div className="distribution-row" key={item.label}>
+              <span className="distribution-label" title={label}>
+                {label}
+              </span>
+              <div className="distribution-track">
+                <div
+                  className="distribution-fill"
+                  style={{ width: `${Math.max(4, (item.count / max) * 100)}%` }}
+                />
+              </div>
+              <span className="distribution-count">{item.count}</span>
             </div>
-            <span className="distribution-count">{item.count}</span>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </section>
   )

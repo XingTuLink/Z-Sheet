@@ -195,6 +195,75 @@ def test_different_name_but_same_values_links_when_semantic():
     assert link.on_to == "customer_name"
 
 
+def test_mutual_links_keep_only_the_stronger_direction():
+    # The order sheet references 客户名称 while the customer sheet carries an
+    # 订单号 column, so both directions score; one-to-many keeps only the side
+    # with full recall.
+    result = _run([
+        _sheet("客户", ["客户名称", "订单号"], [
+            ["杭州", "SO-1"], ["深圳", "SO-2"], ["成都", "SO-1"],
+        ]),
+        _sheet("订单", ["订单号", "客户名称", "金额"], [
+            ["SO-1", "杭州", "100"], ["SO-2", "深圳", "200"],
+            ["SO-3", "成都", "300"], ["SO-4", "杭州", "400"],
+        ]),
+    ])
+    links = {link.key: link for link in result.inferred_links}
+    assert set(links) == {"customer_to_order"}
+    assert links["customer_to_order"].confidence == 0.88
+
+
+def test_mutual_links_with_equal_evidence_drop_both_directions():
+    # Symmetric partial overlap: neither direction is provably the parent, so
+    # V0.1 emits nothing rather than guessing a direction (design 10.2).
+    result = _run([
+        _sheet("客户", ["客户编号", "客户名称", "订单号"], [
+            ["1", "杭州", "SO-1"], ["2", "深圳", "SO-2"], ["3", "成都", "SO-1"],
+        ]),
+        _sheet("订单", ["订单号", "客户编号", "金额"], [
+            ["SO-1", "1", "100"], ["SO-2", "1", "200"], ["SO-3", "2", "300"],
+        ]),
+    ])
+    assert result.inferred_links == []
+
+
+def test_positional_row_number_key_is_downgraded_and_labelled():
+    # Two unrelated directory sheets that both auto-number rows 1,2,3: labels
+    # and values match, but the key is a row number, so the candidate must not
+    # masquerade as a confident relation.
+    result = _run([
+        _sheet("客户", ["编号", "客户名称"],
+               [["1", "杭州"], ["2", "深圳"], ["3", "成都"]]),
+        _sheet("商品", ["编号", "商品名称", "备注"],
+               [["1", "鼠标", "x"], ["1", "键盘", "y"], ["2", "支架", "z"]]),
+    ])
+    links = {link.key: link for link in result.inferred_links}
+    assert set(links) == {"customer_to_product"}
+    link = links["customer_to_product"]
+    assert link.confidence == 0.5
+    assert link.needs_review is True
+    assert "low_discrimination_key" in link.signals
+    assert link.review_reason and "行号" in link.review_reason
+    assert "巧合" in link.review_reason
+
+
+def test_non_positional_numeric_key_is_not_labelled_low_discrimination():
+    # Business ids offset from 1 are not a row index and must keep their score.
+    result = _run([
+        _sheet("客户", ["客户编号", "客户名称"], [
+            ["1001", "杭州"], ["1002", "深圳"], ["1003", "成都"],
+        ]),
+        _sheet("订单", ["订单编号", "客户编号", "金额"], [
+            ["SO-1", "1001", "100"], ["SO-2", "1001", "200"],
+            ["SO-3", "1002", "300"],
+        ]),
+    ])
+    links = {link.key: link for link in result.inferred_links}
+    link = links["customer_to_order"]
+    assert "low_discrimination_key" not in link.signals
+    assert link.confidence == 0.75
+
+
 # ---------- assembly ----------
 
 

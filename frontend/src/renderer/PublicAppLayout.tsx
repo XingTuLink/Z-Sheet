@@ -6,7 +6,7 @@ import { useQuery } from '@tanstack/react-query'
 import { NavLink, Outlet, useParams } from 'react-router-dom'
 
 import { fetchPublicBootstrap } from '../api/publication'
-import { BrandLockup, CompanyByline, COMPANY_NAME } from '../components/Brand'
+import { BrandLockup, CompanyByline, CompanyFooter } from '../components/Brand'
 import { RuntimeProvider } from './RuntimeProvider'
 
 export function PublicAppLayout() {
@@ -77,14 +77,12 @@ export function PublicAppLayout() {
             <span className="public-readonly-badge" title="此系统由他人发布，仅可浏览">
               只读
             </span>
-            <span className="brand-company" title={COMPANY_NAME}>
-              {COMPANY_NAME}
-            </span>
           </div>
         </header>
         <main className="content">
           <Outlet />
         </main>
+        <CompanyFooter />
       </div>
     </RuntimeProvider>
   )

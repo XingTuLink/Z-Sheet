@@ -35,6 +35,7 @@ from backend.storage.repositories import (
     model_repository,
     understanding_repository,
 )
+from backend.understanding.missing_values import is_missing_token
 from backend.understanding.model_assembly import EntityPlan, assemble_model, build_entity_plans
 from backend.understanding.profiling import add_profiles
 from backend.understanding.schemas import InferredLink, ProfiledParsedWorkbook
@@ -233,6 +234,11 @@ def _coerce_cell(field: BusinessField, cell: Cell, where: str) -> Any:
         return None
 
     ftype = field.type
+    # Conventional missing markers ("not provided", "Not found", "无"...) are
+    # absent data in typed columns, never a value to validate. Free-text
+    # columns keep the literal text — such words can be genuine remarks.
+    if ftype is not FieldType.STRING and is_missing_token(text):
+        return None
     if ftype is FieldType.ENUM:
         return _coerce_enum_value(field, text)
     if ftype in (FieldType.STRING, FieldType.PHONE):
@@ -400,14 +406,26 @@ def confirm_workbook(
     records = extract_records(plans, model)
     record_counts = {entity_key: len(rows) for entity_key, rows in records.items()}
 
-    record = model_repository.upsert_model(
-        db,
-        WORKSPACE_APP_KEY,
-        model,
-        operator=CONFIRM_OPERATOR,
-        source_request=filename,
-    )
-    app_data_repository.upsert_records(db, WORKSPACE_APP_KEY, records)
+    # Model version and business rows are one logical write: committing between
+    # them would leave a new model with stale (or empty) data if the row write
+    # failed, i.e. exactly the "records show 0 after re-upload" inconsistency.
+    # Both go into one transaction and either land together or not at all.
+    try:
+        record = model_repository.upsert_model(
+            db,
+            WORKSPACE_APP_KEY,
+            model,
+            operator=CONFIRM_OPERATOR,
+            source_request=filename,
+            commit=False,
+        )
+        app_data_repository.upsert_records(
+            db, WORKSPACE_APP_KEY, records, commit=False
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
     return ConfirmSummary(
         app_key=WORKSPACE_APP_KEY,

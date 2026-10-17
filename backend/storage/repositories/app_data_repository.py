@@ -16,8 +16,18 @@ from backend.storage.models import AppDataRecord
 from backend.storage.repositories.model_repository import validate_app_key
 
 
-def upsert_records(db: Session, app_key: str, records: dict[str, Any]) -> None:
-    """Replace the whole records document for an app and commit."""
+def upsert_records(
+    db: Session,
+    app_key: str,
+    records: dict[str, Any],
+    *,
+    commit: bool = True,
+) -> None:
+    """Replace the whole records document for an app and commit.
+
+    ``commit=False`` leaves the write in the caller's transaction so Confirm can
+    commit the model version and these rows together (or discard both).
+    """
     validate_app_key(app_key)
     record = db.get(AppDataRecord, app_key)
     if record is None:
@@ -26,6 +36,8 @@ def upsert_records(db: Session, app_key: str, records: dict[str, Any]) -> None:
     else:
         record.records = records
         record.updated_at = datetime.now(UTC)
+    if not commit:
+        return
     try:
         db.commit()
     except Exception:

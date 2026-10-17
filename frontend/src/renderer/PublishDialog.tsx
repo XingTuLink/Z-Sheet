@@ -139,6 +139,7 @@ function CreateForm({
       await queryClient.invalidateQueries({ queryKey: ['publication', appKey] })
     } catch (err) {
       setError(failMessage(err, '发布失败，请稍后重试'))
+    } finally {
       setBusy(false)
     }
   }
@@ -148,7 +149,7 @@ function CreateForm({
       <div className="patch-body">
         <p className="publish-warn">
           发布后，任何拿到链接的人都可以<strong>浏览这个系统的全部数据</strong>
-          （只读，不能修改）。请确认表中不含不便公开的信息。
+          （不能修改）。请确认表中不含不便公开的信息。
         </p>
         <label className="publish-field" htmlFor="publish-slug-new">
           自定义链接标识
@@ -234,6 +235,7 @@ function PublishedForm({
       await refresh()
     } catch (err) {
       setError(failMessage(err, '保存失败，请稍后重试'))
+    } finally {
       setBusy(false)
     }
   }
@@ -246,6 +248,7 @@ function PublishedForm({
       await refresh()
     } catch (err) {
       setError(failMessage(err, '更新发布失败，请稍后重试'))
+    } finally {
       setBusy(false)
     }
   }
@@ -262,6 +265,7 @@ function PublishedForm({
       await refresh()
     } catch (err) {
       setError(failMessage(err, '下线失败，请稍后重试'))
+    } finally {
       setBusy(false)
     }
   }
@@ -271,7 +275,7 @@ function PublishedForm({
       <div className="patch-body">
         {publication.public ? (
           <>
-            <p className="publish-ok">系统已发布，访客打开此链接即可只读浏览：</p>
+            <p className="publish-ok">系统已发布，访客打开此链接即可浏览：</p>
             <div className="publish-link-box">
               <span className="publish-link-text">{publicUrl}</span>
               <button

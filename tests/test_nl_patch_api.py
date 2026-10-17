@@ -21,6 +21,7 @@ from backend.api.main import app
 from backend.api.routes.patch import get_chat_client
 from backend.storage.db import SessionLocal
 from backend.storage.models import PatchSessionRecord
+from backend.storage.repositories import patch_session_repository
 
 client = TestClient(app)
 SALES_YAML = (
@@ -198,12 +199,43 @@ def test_reject_keeps_model_and_blocks_later_confirm():
     assert client.get("/api/v1/models/default").json()["version"] == 1
 
 
-def test_confirm_is_single_use():
+def test_confirm_is_single_use(caplog: pytest.LogCaptureFixture):
+    caplog.set_level("INFO", logger="zsheet")
     _import()
     session_id = _preview(FIELD_ADD_RESPONSE).json()["session_id"]
     assert _confirm("default", session_id).status_code == 200
     second = _confirm("default", session_id)
     assert second.status_code == 409
+    assert client.get("/api/v1/models/default").json()["version"] == 2
+    # A duplicate confirm must leave a trace so operators can spot double-click
+    # or retry storms rather than only seeing a bare 409.
+    assert any("补丁操作被拒" in record.getMessage() for record in caplog.records)
+
+
+def test_begin_confirm_claims_a_pending_preview_exactly_once():
+    """Concurrent-confirm guard: the status flip is an atomic compare-and-swap.
+
+    Two confirms racing on the same preview must not both proceed. Only the
+    first CAS wins; the loser sees False (the route turns that into 409). The
+    flip rides in the caller's transaction, so rolling back leaves it pending.
+    """
+    sessions = patch_session_repository
+
+    _import()
+    session_id = _preview(FIELD_ADD_RESPONSE).json()["session_id"]
+
+    db = SessionLocal()
+    try:
+        record = sessions.get_session(db, session_id, "default")
+        assert record is not None
+        assert sessions.begin_confirm(db, record) is True
+        assert sessions.begin_confirm(db, record) is False
+        db.rollback()  # uncommitted loss: the preview must return to pending
+    finally:
+        db.close()
+
+    # Still pending, so a real confirm succeeds and appends version 2.
+    assert _confirm("default", session_id).status_code == 200
     assert client.get("/api/v1/models/default").json()["version"] == 2
 
 

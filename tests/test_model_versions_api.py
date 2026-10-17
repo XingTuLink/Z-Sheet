@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.api.main import app
 from backend.domain.serialization import model_from_yaml
+from backend.storage.repositories import model_repository as repo
 
 client = TestClient(app)
 SALES_YAML = (
@@ -164,3 +167,128 @@ def test_patch_against_unknown_app_is_404():
         json={"ops": [{"op": "add", "path": "/entities/-", "value": {}}]},
     )
     assert response.status_code == 404
+
+
+def test_direct_patch_refuses_identity_rewrite():
+    """Design 8.3 layer 3 on the raw write path: identity is never rewritten.
+
+    The UI edits through preview/confirm; this raw endpoint has no review gate,
+    so a schema-legal but business-unsafe change must be refused outright.
+    """
+    _import()
+    response = client.post(
+        "/api/v1/models/default/patches",
+        json={
+            "ops": [
+                {"op": "replace", "path": "/entities/0/key_field", "value": "phone"}
+            ]
+        },
+    )
+    assert response.status_code == 422, response.text
+    categories = {risk["category"] for risk in response.json()["risks"]}
+    assert "identifier_changed" in categories
+    # A refused change must not have created a version.
+    assert client.get("/api/v1/models/default").json()["version"] == 1
+
+
+def test_direct_patch_refuses_metric_definition_rewrite():
+    _import()
+    response = client.post(
+        "/api/v1/models/default/patches",
+        json={
+            "ops": [
+                {
+                    "op": "replace",
+                    "path": "/metrics/2/business_definition",
+                    "value": "改写后的业务口径",
+                }
+            ]
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert [risk["category"] for risk in response.json()["risks"]] == [
+        "metric_definition_changed"
+    ]
+    assert client.get("/api/v1/models/default").json()["version"] == 1
+
+
+def test_direct_patch_outcomes_are_observable(caplog: pytest.LogCaptureFixture):
+    """直写 Patch 的结果必须留痕：被拦记 WARNING，成功记 INFO。"""
+    _import()
+    caplog.set_level("INFO", logger="zsheet")
+
+    refused = client.post(
+        "/api/v1/models/default/patches",
+        json={
+            "ops": [
+                {"op": "replace", "path": "/entities/0/key_field", "value": "phone"}
+            ]
+        },
+    )
+    assert refused.status_code == 422, refused.text
+    assert any("业务安全拦截" in record.getMessage() for record in caplog.records)
+
+    caplog.clear()
+
+    accepted = client.post(
+        "/api/v1/models/default/patches",
+        json={
+            "ops": [
+                {
+                    "op": "add",
+                    "path": "/entities/0/fields/-",
+                    "value": {
+                        "key": "email",
+                        "name": "邮箱",
+                        "type": "string",
+                        "role": "dimension",
+                        "confidence": 0.95,
+                    },
+                }
+            ]
+        },
+    )
+    assert accepted.status_code == 201, accepted.text
+    assert any(
+        "直写 Patch 生成新版本" in record.getMessage() for record in caplog.records
+    )
+
+
+def test_direct_patch_version_race_maps_to_conflict(monkeypatch):
+    """Concurrent writes: a lost version-number race answers 409, not a 500.
+
+    Two writers read the same current version; the ``(app_key, version)``
+    unique constraint lets only one append it. Simulated by pinning
+    ``get_current`` to a stale snapshot.
+    """
+    _import()
+    add_field = {
+        "op": "add",
+        "path": "/entities/0/fields/-",
+        "value": {
+            "key": "email",
+            "name": "邮箱",
+            "type": "string",
+            "role": "dimension",
+            "confidence": 0.95,
+        },
+    }
+    first = client.post("/api/v1/models/default/patches", json={"ops": [add_field]})
+    assert first.status_code == 201, first.text
+
+    stale = client.get("/api/v1/models/default/versions/1").json()
+    monkeypatch.setattr(
+        repo,
+        "get_current",
+        lambda _db, _app_key, **_kwargs: SimpleNamespace(
+            version=1, snapshot=stale["snapshot"]
+        ),
+    )
+    raced = client.post(
+        "/api/v1/models/default/patches",
+        json={"ops": [{**add_field, "value": {**add_field["value"], "key": "wechat"}}]},
+    )
+    assert raced.status_code == 409, raced.text
+    # The losing write left no trace.
+    versions = client.get("/api/v1/models/default/versions").json()
+    assert [v["version"] for v in versions] == [1, 2]

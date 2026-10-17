@@ -150,7 +150,7 @@ def add_profiles(
     from backend.domain.serialization import model_to_dict, model_to_yaml
 
     from .entity_inference import infer_entity
-    from .link_inference import infer_links
+    from .link_inference import infer_links, normalize_links
     from .llm_understanding import (
         LLMLinkSpec,
         apply_llm_understanding,
@@ -236,7 +236,7 @@ def add_profiles(
             for link in llm_links
             if (link.from_entity, link.to_entity, link.on_to) not in covered
         )
-    result.inferred_links = all_links
+    result.inferred_links = normalize_links(all_links, plans)
     _emit(STAGE_RELATIONS, len(result.inferred_links))
     _emit(STAGE_ASSEMBLE, 0)
     model = assemble_model(result, plans, result.inferred_links)

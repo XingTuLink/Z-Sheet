@@ -16,11 +16,13 @@ from typing import Any, Literal, overload
 
 import yaml
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.domain.models import BusinessModel
 from backend.domain.serialization import model_from_yaml
 from backend.patch.apply import PatchError
+from backend.patch.business_safety import BusinessSafetyError, detect_business_risks
 from backend.patch.validation import validate_patch_snapshot
 from backend.storage.models import ModelVersionRecord
 
@@ -41,6 +43,9 @@ class AppExistsError(Exception):
 
 class VersionConflictError(Exception):
     """Rollback/undo points at a version that cannot be restored to."""
+
+
+VERSION_CONFLICT_MESSAGE = "系统模型已被其他修改更新，请基于最新版本重新提交"
 
 
 def validate_app_key(app_key: str) -> str:
@@ -96,12 +101,16 @@ def upsert_model(
     *,
     operator: str = "local",
     source_request: str | None = None,
+    commit: bool = True,
 ) -> ModelVersionRecord:
     """Persist a fully re-assembled model (Day 15 Confirm).
 
     Unlike ``import_model`` this never raises ``AppExistsError``: re-confirming
     a new workbook appends another full-snapshot version (patch=None), so the
     version history still shows every confirmed generation.
+
+    ``commit=False`` flushes the row and leaves it in the caller's transaction,
+    so Confirm can bundle the model with the business rows and commit once.
     """
     validate_app_key(app_key)
     current = get_current(db, app_key, raise_if_missing=False)
@@ -116,14 +125,7 @@ def upsert_model(
         source_request=source_request,
         validation_status="passed",
     )
-    try:
-        db.add(record)
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    db.refresh(record)
-    return record
+    return _append_version(db, record, commit=commit)
 
 
 @overload
@@ -178,6 +180,37 @@ def get_version(db: Session, app_key: str, version: int) -> ModelVersionRecord:
     return record
 
 
+def _append_version(
+    db: Session, record: ModelVersionRecord, *, commit: bool = True
+) -> ModelVersionRecord:
+    """Insert one append-only version row inside the caller's transaction.
+
+    With ``commit=False`` the row is flushed but left uncommitted, so a
+    multi-step write (model + business rows) can land atomically; if the later
+    step fails, the caller's rollback discards this row too.
+
+    The ``(app_key, version)`` unique constraint is the last line of defence
+    against two writers that read the same current version: the loser hits
+    ``IntegrityError``, which surfaces as ``VersionConflictError`` (HTTP 409)
+    instead of a raw 500.
+    """
+    try:
+        db.add(record)
+        if commit:
+            db.commit()
+        else:
+            db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        raise VersionConflictError(VERSION_CONFLICT_MESSAGE) from exc
+    except Exception:
+        db.rollback()
+        raise
+    if commit:
+        db.refresh(record)
+    return record
+
+
 def apply_patch_as_new_version(
     db: Session,
     app_key: str,
@@ -185,12 +218,25 @@ def apply_patch_as_new_version(
     *,
     source_request: str | None = None,
     operator: str = "local",
+    enforce_business_safety: bool = False,
 ) -> ModelVersionRecord:
-    """Validate + apply a raw JSON Patch and append a new version atomically."""
+    """Validate + apply a raw JSON Patch and append a new version atomically.
+
+    ``enforce_business_safety`` turns on design-8.3 layer 3 for write paths
+    that have no preview/review gate: a change that would delete structure,
+    rewrite identity or redefine a metric raises ``BusinessSafetyError``
+    instead of being persisted.
+    """
     validate_app_key(app_key)
     current = get_current(db, app_key)
 
     new_snapshot = validate_patch_snapshot(current.snapshot, raw_ops)
+    if enforce_business_safety:
+        risks = detect_business_risks(
+            current.snapshot, BusinessModel.model_validate(new_snapshot)
+        )
+        if risks:
+            raise BusinessSafetyError(risks)
 
     record = ModelVersionRecord(
         app_key=app_key,
@@ -201,14 +247,7 @@ def apply_patch_as_new_version(
         source_request=source_request,
         validation_status="passed",
     )
-    try:
-        db.add(record)
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    db.refresh(record)
-    return record
+    return _append_version(db, record)
 
 
 def restore_version(
@@ -245,19 +284,13 @@ def restore_version(
         source_request=f"回滚到版本 {target_version}",
         validation_status="passed",
     )
-    try:
-        db.add(record)
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    db.refresh(record)
-    return record
+    return _append_version(db, record)
 
 
 __all__ = [
     "AppExistsError",
     "AppNotFoundError",
+    "BusinessSafetyError",
     "PatchError",
     "VersionConflictError",
     "apply_patch_as_new_version",

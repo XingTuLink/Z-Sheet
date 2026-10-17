@@ -244,6 +244,12 @@ def rollback_to_version(
 def submit_patch(
     app_key: str, body: PatchSubmitRequest, db: Session = Depends(get_db)
 ) -> Any:
+    """Raw JSON Patch write path.
+
+    The UI edits through the preview/confirm sessions (see ``routes.patch``);
+    this endpoint is the low-level write API, so it has no review gate and must
+    enforce design 8.3 layer 3 itself.
+    """
     try:
         record = repo.apply_patch_as_new_version(
             db,
@@ -251,10 +257,31 @@ def submit_patch(
             body.ops,
             source_request=body.source_request,
             operator=body.operator,
+            enforce_business_safety=True,
         )
     except repo.AppNotFoundError:
         return JSONResponse(
             status_code=404, content={"detail": f"app {app_key!r} not found"}
+        )
+    except repo.BusinessSafetyError as exc:
+        logger.warning(
+            "直写 Patch 被业务安全拦截：app=%s 风险=%s",
+            app_key,
+            [risk.category for risk in exc.risks],
+        )
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            content={
+                "detail": str(exc),
+                "risks": [
+                    {"category": risk.category, "message": risk.message}
+                    for risk in exc.risks
+                ],
+            },
+        )
+    except repo.VersionConflictError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT, content={"detail": str(exc)}
         )
     except (PydanticValidationError, PatchError) as exc:
         if isinstance(exc, PydanticValidationError):
@@ -265,4 +292,11 @@ def submit_patch(
         )
     except ValueError as exc:  # malformed app_key
         return JSONResponse(status_code=422, content={"detail": str(exc)})
+    logger.info(
+        "直写 Patch 生成新版本：app=%s v%d（ops=%d，operator=%s）",
+        app_key,
+        record.version,
+        len(body.ops),
+        body.operator,
+    )
     return _version_detail(record)

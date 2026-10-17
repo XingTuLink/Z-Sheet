@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type CSSProperties } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 
 import { formatCell } from '../format'
@@ -168,7 +168,7 @@ function Pager({
 }
 
 export function ListView({ view }: { view: ListViewModel }) {
-  const { bootstrap, records, readOnly } = useRuntime()
+  const { bootstrap, records, readOnly, deleteRecord } = useRuntime()
   const location = useLocation()
   const { basePath } = resolveAppRoute(location.pathname)
   const model = bootstrap.model
@@ -248,6 +248,16 @@ export function ListView({ view }: { view: ListViewModel }) {
     setPage(patch.page ?? 1)
   }
 
+  const handleDelete = async (key: string) => {
+    const confirmed = window.confirm(`确定删除这条${entity.name}记录吗？此操作会立即保存。`)
+    if (!confirmed) return
+    try {
+      await deleteRecord(entity.key, key)
+    } catch {
+      window.alert('删除失败，请稍后重试')
+    }
+  }
+
   return (
     <section className="view">
       <header className="view-header">
@@ -316,7 +326,15 @@ export function ListView({ view }: { view: ListViewModel }) {
         </div>
       )}
 
-      <div className="card grid-card">
+      <div
+        className="card grid-card"
+        data-paged={result.total > 0 ? 'true' : undefined}
+        style={
+          result.total > 0
+            ? ({ '--grid-rows': pageSize } as CSSProperties)
+            : undefined
+        }
+      >
         {result.total === 0 ? (
           <EmptyState>
             {filtered ? (
@@ -357,7 +375,7 @@ export function ListView({ view }: { view: ListViewModel }) {
                     </th>
                   )
                 })}
-                {formView && !readOnly && <th className="row-action-head">操作</th>}
+                {!readOnly && <th className="row-action-head">操作</th>}
               </tr>
             </thead>
             <tbody>
@@ -367,36 +385,52 @@ export function ListView({ view }: { view: ListViewModel }) {
                   <tr key={rowKey}>
                     {columns.map(({ key, field }) => {
                       const value = row[key]
+                      const text = formatCell(field, value)
+                      const title =
+                        value === null || value === undefined || value === ''
+                          ? undefined
+                          : text
                       if (key === entity.key_field && detailView) {
                         return (
-                          <td key={key}>
+                          <td key={key} title={title}>
                             <Link
                               className="row-link"
                               to={`${basePath}/views/${detailView.key}?id=${encodeURIComponent(String(value ?? ''))}`}
                             >
-                              {formatCell(field, value)}
+                              {text}
                             </Link>
                           </td>
                         )
                       }
                       return (
-                        <td key={key}>
+                        <td key={key} title={title}>
                           {field.type === 'enum' && value ? (
-                            <span className="tag">{formatCell(field, value)}</span>
+                            <span className="tag">{text}</span>
                           ) : (
-                            formatCell(field, value)
+                            text
                           )}
                         </td>
                       )
                     })}
-                    {formView && !readOnly && (
+                    {!readOnly && (
                       <td className="row-action-cell">
-                        <Link
-                          className="row-link"
-                          to={`${basePath}/views/${formView.key}?id=${encodeURIComponent(rowKey)}`}
-                        >
-                          编辑
-                        </Link>
+                        <span className="row-actions">
+                          {formView && (
+                            <Link
+                              className="row-link"
+                              to={`${basePath}/views/${formView.key}?id=${encodeURIComponent(rowKey)}`}
+                            >
+                              编辑
+                            </Link>
+                          )}
+                          <button
+                            type="button"
+                            className="row-link row-action-danger"
+                            onClick={() => void handleDelete(rowKey)}
+                          >
+                            删除
+                          </button>
+                        </span>
                       </td>
                     )}
                   </tr>
