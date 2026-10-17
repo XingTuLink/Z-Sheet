@@ -215,6 +215,37 @@ export interface ConfirmResponse {
 }
 
 /**
+ * POST a multipart form, turning a network-level failure (server down, DNS,
+ * offline) into a Chinese message instead of the browser's English one.
+ */
+async function postForm(url: string, form: FormData): Promise<Response> {
+  try {
+    return await fetch(url, { method: 'POST', body: form })
+  } catch {
+    throw new Error('无法连接服务，请确认后端已启动后重试。')
+  }
+}
+
+/**
+ * Read the server's user-facing Chinese `detail`, falling back to `fallback`
+ * (plus the status code) for non-JSON bodies such as proxy error pages.
+ */
+async function errorDetail(response: Response, fallback: string): Promise<string> {
+  let payload: unknown = null
+  try {
+    payload = await response.json()
+  } catch {
+    payload = null
+  }
+  const detail =
+    payload && typeof payload === 'object' && 'detail' in payload
+      ? (payload as { detail?: unknown }).detail
+      : undefined
+  if (typeof detail === 'string' && detail) return detail
+  return `${fallback}（HTTP ${response.status}）`
+}
+
+/**
  * Day 15/22: submit the reviewed workbook to the Confirm endpoint. The server
  * reuses the understanding result cached at parse time (keyed by file hash) —
  * never client-supplied structure — and applies the review decisions; the
@@ -246,10 +277,7 @@ export async function confirmWorkbook(
   form.append('file', file)
   form.append('decisions', JSON.stringify(decisions))
 
-  const response = await fetch('/api/v1/ingestion/confirm', {
-    method: 'POST',
-    body: form,
-  })
+  const response = await postForm('/api/v1/ingestion/confirm', form)
 
   let payload: unknown = null
   try {
@@ -293,12 +321,14 @@ export async function parseWorkbookWithProgress(
   const form = new FormData()
   form.append('file', file)
 
-  const response = await fetch('/api/v1/ingestion/parse/stream', {
-    method: 'POST',
-    body: form,
-  })
-  if (!response.ok || !response.body) {
-    throw new Error(`服务暂不可用（HTTP ${response.status}），请确认后端已启动。`)
+  const response = await postForm('/api/v1/ingestion/parse/stream', form)
+  if (!response.ok) {
+    throw new Error(
+      await errorDetail(response, '分析失败，请稍后重试。'),
+    )
+  }
+  if (!response.body) {
+    throw new Error('服务未返回分析结果，请重试。')
   }
 
   const reader = response.body.getReader()
@@ -334,9 +364,16 @@ export async function parseWorkbookWithProgress(
   }
 
   for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
+    let chunk: ReadableStreamReadResult<Uint8Array>
+    try {
+      chunk = await reader.read()
+    } catch {
+      // The connection dropped mid-stream: report it in Chinese and let the
+      // caller retry the same file (the server caches by file hash).
+      throw new Error('连接中断，未收到分析结果，请重试。')
+    }
+    if (chunk.done) break
+    buffer += decoder.decode(chunk.value, { stream: true })
 
     let separator: number
     while ((separator = buffer.indexOf('\n\n')) >= 0) {

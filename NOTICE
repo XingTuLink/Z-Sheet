@@ -1,8 +1,12 @@
 Z-Sheet
-Copyright 2026 The Z-Sheet Authors
+Copyright (C) 2026 The Z-Sheet Authors
 
-This product is licensed under the Apache License, Version 2.0 (the "License");
-you may not use this product except in compliance with the License.
-A copy of the License is available at:
+This product is licensed under the GNU Affero General Public License v3.0
+(the "License"); you may not use this product except in compliance with the
+License. A copy of the License is available at:
 
-    http://www.apache.org/licenses/LICENSE-2.0
+    ./LICENSE
+
+The AGPL-3.0 network clause applies to this product: if you run a modified
+version of it on a network server, you must offer the corresponding source
+code to the users of that service.

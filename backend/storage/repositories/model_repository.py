@@ -45,6 +45,9 @@ class VersionConflictError(Exception):
     """Rollback/undo points at a version that cannot be restored to."""
 
 
+VERSION_CONFLICT_MESSAGE = "系统模型已被其他修改更新，请基于最新版本重新提交"
+
+
 def validate_app_key(app_key: str) -> str:
     if not APP_KEY_PATTERN.match(app_key):
         raise ValueError(
@@ -98,12 +101,16 @@ def upsert_model(
     *,
     operator: str = "local",
     source_request: str | None = None,
+    commit: bool = True,
 ) -> ModelVersionRecord:
     """Persist a fully re-assembled model (Day 15 Confirm).
 
     Unlike ``import_model`` this never raises ``AppExistsError``: re-confirming
     a new workbook appends another full-snapshot version (patch=None), so the
     version history still shows every confirmed generation.
+
+    ``commit=False`` flushes the row and leaves it in the caller's transaction,
+    so Confirm can bundle the model with the business rows and commit once.
     """
     validate_app_key(app_key)
     current = get_current(db, app_key, raise_if_missing=False)
@@ -118,14 +125,7 @@ def upsert_model(
         source_request=source_request,
         validation_status="passed",
     )
-    try:
-        db.add(record)
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    db.refresh(record)
-    return record
+    return _append_version(db, record, commit=commit)
 
 
 @overload
@@ -180,8 +180,14 @@ def get_version(db: Session, app_key: str, version: int) -> ModelVersionRecord:
     return record
 
 
-def _append_version(db: Session, record: ModelVersionRecord) -> ModelVersionRecord:
+def _append_version(
+    db: Session, record: ModelVersionRecord, *, commit: bool = True
+) -> ModelVersionRecord:
     """Insert one append-only version row inside the caller's transaction.
+
+    With ``commit=False`` the row is flushed but left uncommitted, so a
+    multi-step write (model + business rows) can land atomically; if the later
+    step fails, the caller's rollback discards this row too.
 
     The ``(app_key, version)`` unique constraint is the last line of defence
     against two writers that read the same current version: the loser hits
@@ -190,16 +196,18 @@ def _append_version(db: Session, record: ModelVersionRecord) -> ModelVersionReco
     """
     try:
         db.add(record)
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
     except IntegrityError as exc:
         db.rollback()
-        raise VersionConflictError(
-            "系统模型已被其他修改更新，请基于最新版本重新提交"
-        ) from exc
+        raise VersionConflictError(VERSION_CONFLICT_MESSAGE) from exc
     except Exception:
         db.rollback()
         raise
-    db.refresh(record)
+    if commit:
+        db.refresh(record)
     return record
 
 

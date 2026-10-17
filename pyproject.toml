@@ -1,6 +1,6 @@
 [project]
 name = "zsheet"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 description = "Z-Sheet: turn an Excel/CSV file into a usable business web app via an AI-understood Business Model."
 readme = "README.md"
 requires-python = ">=3.11"

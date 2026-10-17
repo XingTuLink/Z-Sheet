@@ -94,4 +94,4 @@ chore:    构建 / 工具 / 杂项
 
 ## 许可证
 
-提交到本仓库即表示你同意你的贡献以 [Apache License 2.0](./LICENSE) 授权。
+提交到本仓库即表示你同意你的贡献以 [GNU Affero General Public License v3.0](./LICENSE) 授权。

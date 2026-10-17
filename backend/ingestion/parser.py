@@ -23,8 +23,12 @@ from typing import Literal
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
 
+from backend.logging_config import get_logger
+
 from .header_detection import detect_header_row, used_width
 from .schemas import Cell, ParsedSheet, ParsedWorkbook
+
+logger = get_logger(__name__)
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 MAX_DATA_ROWS = 50_000
@@ -193,11 +197,13 @@ def _formula_cell_coords(content: bytes) -> dict[str, set[tuple[int, int]]]:
     A formula whose result was never cached reads back as None under
     ``data_only=True``, silently emptying the cell. The scan is advisory:
     any failure simply degrades to "no formulas detected" rather than
-    failing the whole parse.
+    failing the whole parse — but it must leave a trace, otherwise a real
+    scan failure is indistinguishable from a genuinely formula-free file.
     """
     try:
         book = load_workbook(io.BytesIO(content), data_only=False, read_only=True)
     except Exception:
+        logger.warning("公式单元格扫描：工作簿无法只读打开，本次跳过公式列告警", exc_info=True)
         return {}
     try:
         coords: dict[str, set[tuple[int, int]]] = {}
@@ -210,6 +216,7 @@ def _formula_cell_coords(content: bytes) -> dict[str, set[tuple[int, int]]]:
             coords[worksheet.title] = found
         return coords
     except Exception:
+        logger.warning("公式单元格扫描：遍历工作表失败，本次跳过公式列告警", exc_info=True)
         return {}
     finally:
         book.close()

@@ -396,7 +396,7 @@ a:hover {
 /* The action column keeps a fixed width; data columns share the rest. */
 .grid .row-action-head,
 .grid .row-action-cell {
-  width: 72px;
+  width: 104px;
   text-align: right;
 }
 
@@ -414,6 +414,31 @@ a:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Row actions sit side by side and share one right-aligned cell. */
+.row-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+}
+
+/* Destructive row action: same weight as the edit link, danger colour, and
+   rendered as a bare button so no native chrome shows through. */
+.row-action-danger {
+  padding: 0;
+  border: none;
+  background: none;
+  color: #b42318;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.row-action-danger:hover {
+  text-decoration: underline;
 }
 
 .tag {

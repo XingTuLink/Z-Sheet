@@ -168,7 +168,7 @@ function Pager({
 }
 
 export function ListView({ view }: { view: ListViewModel }) {
-  const { bootstrap, records, readOnly } = useRuntime()
+  const { bootstrap, records, readOnly, deleteRecord } = useRuntime()
   const location = useLocation()
   const { basePath } = resolveAppRoute(location.pathname)
   const model = bootstrap.model
@@ -246,6 +246,16 @@ export function ListView({ view }: { view: ListViewModel }) {
   const updatePager = (patch: { page?: number; pageSize?: number }) => {
     if (patch.pageSize !== undefined) setPageSize(patch.pageSize)
     setPage(patch.page ?? 1)
+  }
+
+  const handleDelete = async (key: string) => {
+    const confirmed = window.confirm(`确定删除这条${entity.name}记录吗？此操作会立即保存。`)
+    if (!confirmed) return
+    try {
+      await deleteRecord(entity.key, key)
+    } catch {
+      window.alert('删除失败，请稍后重试')
+    }
   }
 
   return (
@@ -365,7 +375,7 @@ export function ListView({ view }: { view: ListViewModel }) {
                     </th>
                   )
                 })}
-                {formView && !readOnly && <th className="row-action-head">操作</th>}
+                {!readOnly && <th className="row-action-head">操作</th>}
               </tr>
             </thead>
             <tbody>
@@ -402,14 +412,25 @@ export function ListView({ view }: { view: ListViewModel }) {
                         </td>
                       )
                     })}
-                    {formView && !readOnly && (
+                    {!readOnly && (
                       <td className="row-action-cell">
-                        <Link
-                          className="row-link"
-                          to={`${basePath}/views/${formView.key}?id=${encodeURIComponent(rowKey)}`}
-                        >
-                          编辑
-                        </Link>
+                        <span className="row-actions">
+                          {formView && (
+                            <Link
+                              className="row-link"
+                              to={`${basePath}/views/${formView.key}?id=${encodeURIComponent(rowKey)}`}
+                            >
+                              编辑
+                            </Link>
+                          )}
+                          <button
+                            type="button"
+                            className="row-link row-action-danger"
+                            onClick={() => void handleDelete(rowKey)}
+                          >
+                            删除
+                          </button>
+                        </span>
                       </td>
                     )}
                   </tr>

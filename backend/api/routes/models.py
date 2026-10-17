@@ -264,6 +264,11 @@ def submit_patch(
             status_code=404, content={"detail": f"app {app_key!r} not found"}
         )
     except repo.BusinessSafetyError as exc:
+        logger.warning(
+            "直写 Patch 被业务安全拦截：app=%s 风险=%s",
+            app_key,
+            [risk.category for risk in exc.risks],
+        )
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content={
@@ -287,4 +292,11 @@ def submit_patch(
         )
     except ValueError as exc:  # malformed app_key
         return JSONResponse(status_code=422, content={"detail": str(exc)})
+    logger.info(
+        "直写 Patch 生成新版本：app=%s v%d（ops=%d，operator=%s）",
+        app_key,
+        record.version,
+        len(body.ops),
+        body.operator,
+    )
     return _version_detail(record)

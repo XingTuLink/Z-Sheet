@@ -406,14 +406,26 @@ def confirm_workbook(
     records = extract_records(plans, model)
     record_counts = {entity_key: len(rows) for entity_key, rows in records.items()}
 
-    record = model_repository.upsert_model(
-        db,
-        WORKSPACE_APP_KEY,
-        model,
-        operator=CONFIRM_OPERATOR,
-        source_request=filename,
-    )
-    app_data_repository.upsert_records(db, WORKSPACE_APP_KEY, records)
+    # Model version and business rows are one logical write: committing between
+    # them would leave a new model with stale (or empty) data if the row write
+    # failed, i.e. exactly the "records show 0 after re-upload" inconsistency.
+    # Both go into one transaction and either land together or not at all.
+    try:
+        record = model_repository.upsert_model(
+            db,
+            WORKSPACE_APP_KEY,
+            model,
+            operator=CONFIRM_OPERATOR,
+            source_request=filename,
+            commit=False,
+        )
+        app_data_repository.upsert_records(
+            db, WORKSPACE_APP_KEY, records, commit=False
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
     return ConfirmSummary(
         app_key=WORKSPACE_APP_KEY,

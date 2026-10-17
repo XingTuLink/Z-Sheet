@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.api.main import app
@@ -209,6 +210,48 @@ def test_direct_patch_refuses_metric_definition_rewrite():
         "metric_definition_changed"
     ]
     assert client.get("/api/v1/models/default").json()["version"] == 1
+
+
+def test_direct_patch_outcomes_are_observable(caplog: pytest.LogCaptureFixture):
+    """直写 Patch 的结果必须留痕：被拦记 WARNING，成功记 INFO。"""
+    _import()
+    caplog.set_level("INFO", logger="zsheet")
+
+    refused = client.post(
+        "/api/v1/models/default/patches",
+        json={
+            "ops": [
+                {"op": "replace", "path": "/entities/0/key_field", "value": "phone"}
+            ]
+        },
+    )
+    assert refused.status_code == 422, refused.text
+    assert any("业务安全拦截" in record.getMessage() for record in caplog.records)
+
+    caplog.clear()
+
+    accepted = client.post(
+        "/api/v1/models/default/patches",
+        json={
+            "ops": [
+                {
+                    "op": "add",
+                    "path": "/entities/0/fields/-",
+                    "value": {
+                        "key": "email",
+                        "name": "邮箱",
+                        "type": "string",
+                        "role": "dimension",
+                        "confidence": 0.95,
+                    },
+                }
+            ]
+        },
+    )
+    assert accepted.status_code == 201, accepted.text
+    assert any(
+        "直写 Patch 生成新版本" in record.getMessage() for record in caplog.records
+    )
 
 
 def test_direct_patch_version_race_maps_to_conflict(monkeypatch):

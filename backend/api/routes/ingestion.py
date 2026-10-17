@@ -27,7 +27,7 @@ from backend.ingestion.parser import MAX_UPLOAD_BYTES, ParseError, parse_workboo
 from backend.ingestion.template import TEMPLATE_FILENAME, build_template_workbook
 from backend.logging_config import get_logger
 from backend.storage.db import SessionLocal, get_db
-from backend.storage.repositories import understanding_repository
+from backend.storage.repositories import model_repository, understanding_repository
 from backend.understanding import confirmation
 from backend.understanding.profiling import STAGE_SHEETS, add_profiles
 from backend.understanding.schemas import ProfiledParsedWorkbook
@@ -35,6 +35,8 @@ from backend.understanding.schemas import ProfiledParsedWorkbook
 router = APIRouter(prefix="/api/v1/ingestion", tags=["ingestion"])
 
 logger = get_logger("ingestion")
+
+MAX_UPLOAD_MB = MAX_UPLOAD_BYTES // (1024 * 1024)
 
 # Thread -> generator hand-off items. The understanding pipeline is a
 # synchronous CPU-bound call, so it runs on a worker thread while this
@@ -45,6 +47,20 @@ _WorkerItem = tuple[str, object]
 def _sse(event: str, data: str) -> str:
     """Frame one Server-Sent Event; data must be a single-line JSON string."""
     return f"event: {event}\ndata: {data}\n\n"
+
+
+def _too_large() -> JSONResponse:
+    """Oversize upload: the message is user-facing, so keep it in Chinese."""
+    return JSONResponse(
+        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+        content={"detail": f"文件超过 {MAX_UPLOAD_MB} MB 上限，请拆分或精简后再上传"},
+    )
+
+
+def _entity_count(result: ProfiledParsedWorkbook) -> int:
+    """Entities in the assembled model (0 when nothing could be assembled)."""
+    entities = result.business_model.get("entities") if result.business_model else None
+    return len(entities) if isinstance(entities, list) else 0
 
 
 @router.get("/template")
@@ -74,10 +90,7 @@ async def parse_file(
     # Read one byte past the limit to detect oversize uploads deterministically.
     content = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(content) > MAX_UPLOAD_BYTES:
-        return JSONResponse(
-            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-            content={"detail": f"file exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit"},
-        )
+        return _too_large()
     try:
         workbook = parse_workbook(file.filename or "upload", content)
         result = add_profiles(workbook)
@@ -91,6 +104,12 @@ async def parse_file(
     # this result (a second, non-deterministic LLM call could disagree).
     understanding_repository.save_understanding(
         db, understanding_repository.session_key(content), result
+    )
+    logger.info(
+        "解析成功（%s）：工作表 %d、实体 %d",
+        file.filename,
+        len(result.sheets),
+        _entity_count(result),
     )
     return result
 
@@ -108,10 +127,7 @@ async def parse_file_stream(
     """
     content = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(content) > MAX_UPLOAD_BYTES:
-        return JSONResponse(
-            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-            content={"detail": f"file exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit"},
-        )
+        return _too_large()
 
     def generate() -> Iterator[str]:
         try:
@@ -155,6 +171,12 @@ async def parse_file_stream(
                         "理解结果缓存写入失败，Confirm 将回退为重新推理",
                         exc_info=True,
                     )
+                logger.info(
+                    "解析成功（%s）：工作表 %d、实体 %d",
+                    file.filename,
+                    len(workbook.sheets),
+                    _entity_count(result),
+                )
                 events.put(("result", result.model_dump_json()))
             except Exception:
                 # surface pipeline failures as SSE errors
@@ -191,13 +213,6 @@ async def parse_file_stream(
     )
 
 
-def _read_error() -> JSONResponse:
-    return JSONResponse(
-        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-        content={"detail": f"file exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit"},
-    )
-
-
 @router.post("/confirm", response_model=ConfirmResponse)
 async def confirm_file(
     file: UploadFile = File(...),
@@ -212,7 +227,7 @@ async def confirm_file(
     """
     content = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(content) > MAX_UPLOAD_BYTES:
-        return _read_error()
+        return _too_large()
 
     try:
         payload = json.loads(decisions)
@@ -235,8 +250,28 @@ async def confirm_file(
         body: dict[str, object] = {"detail": str(exc)}
         if exc.unresolved:
             body["unresolved"] = exc.unresolved
+        logger.warning(
+            "确认生成被拒（%s）：%s（未决 %d 项）",
+            file.filename,
+            exc,
+            len(exc.unresolved),
+        )
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, content=body
         )
+    except model_repository.VersionConflictError as exc:
+        # Another confirm landed first: nothing was written here, so ask the
+        # user to retry against the version that actually persisted.
+        logger.warning("确认生成时版本冲突（app=%s）：%s", confirmation.WORKSPACE_APP_KEY, exc)
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT, content={"detail": str(exc)}
+        )
 
+    logger.info(
+        "确认生成成功（app=%s 文件=%s 版本=%d 记录=%s）",
+        summary.app_key,
+        file.filename,
+        summary.version,
+        summary.record_counts,
+    )
     return ConfirmResponse(**summary.model_dump())

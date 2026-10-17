@@ -1,15 +1,14 @@
 name: 功能请求
-description: 建议新能力或改进现有能力（提交前请先看 ROADMAP.md 中的 V0.1 禁区）
+description: 建议新能力或改进现有能力（提交前请先看 README 中的后续规划）
 title: "[Feature] "
 labels: ["enhancement"]
 body:
   - type: markdown
     attributes:
       value: |
-        提交前请先阅读 [ROADMAP.md](https://atomgit.com/XingTuLink/Z-Sheet/blob/main/ROADMAP.md)：
-        数据库直连、权限体系、工作流/审批/通知、移动端、拖拽低代码、复杂 BI、Agent、
-        插件生态、Excel 双向同步、多对多关系属于 V0.1 明确禁区，仍欢迎记录，
-        但会排到对应大版本统一评估。
+        提交前请先阅读 README 中的[后续规划](https://atomgit.com/XingTuLink/Z-Sheet#后续规划)一节，
+        它会说明当前阶段的重心；与规划方向不一致的建议也欢迎记录，
+        但可能会排到对应版本统一评估。
 
   - type: textarea
     id: problem

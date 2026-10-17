@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import io
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,6 +12,7 @@ from openpyxl import Workbook
 
 from backend.api.main import app
 from backend.api.routes import ingestion as ingestion_route
+from backend.ingestion import parser as parser_module
 from backend.ingestion.parser import (
     MAX_COLUMNS,
     MAX_DATA_ROWS,
@@ -250,6 +252,32 @@ def test_xlsx_formula_cells_without_cached_value_warn_and_read_empty():
     sheet = parse_workbook("fx.xlsx", buffer.getvalue()).sheets[0]
     assert [row[3] for row in sheet.rows] == [None, None]
     assert any("formula" in warning for warning in sheet.warnings)
+
+
+def test_formula_scan_failure_is_logged_but_parse_continues(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A failing formula scan must leave a trace, not silently read no formulas.
+
+    The scan is best-effort (opens the book read-only with data_only=False);
+    the value grid uses data_only=True. Only the scan call fails here, so the
+    parse itself must still succeed while the failure shows up in the logs.
+    """
+    content = make_xlsx_bytes({"表": [["名称"], ["甲"]]})
+    real_load = parser_module.load_workbook
+
+    def flaky_load(*args: Any, **kwargs: Any) -> Any:
+        if kwargs.get("data_only") is False:
+            raise RuntimeError("模拟公式扫描打开失败")
+        return real_load(*args, **kwargs)
+
+    monkeypatch.setattr(parser_module, "load_workbook", flaky_load)
+    caplog.set_level("WARNING", logger="zsheet")
+
+    workbook = parse_workbook("scan.xlsx", content)
+
+    assert workbook.sheets[0].rows  # parsing itself is unaffected
+    assert any("公式单元格扫描" in record.getMessage() for record in caplog.records)
 
 
 def test_xlsx_fullwidth_header_is_nfkc_normalized():

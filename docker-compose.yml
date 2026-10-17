@@ -5,7 +5,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.backend
-    # ZSHEET_VERSION (e.g. 0.1.0-alpha.1) can be set to tag release images;
+    # ZSHEET_VERSION (e.g. 0.1.0-alpha.2) can be set to tag release images;
     # defaults to the local "dev" tag.
     image: zsheet-backend:${ZSHEET_VERSION:-dev}
     restart: unless-stopped

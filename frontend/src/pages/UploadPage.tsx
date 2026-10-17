@@ -82,6 +82,7 @@ export function UploadPage() {
   const [fileName, setFileName] = useState('')
   const [result, setResult] = useState<UnderstandingResult | null>(null)
   const [errorMessage, setErrorMessage] = useState('')
+  const [failedFile, setFailedFile] = useState<File | null>(null)
   const [dragging, setDragging] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -110,6 +111,7 @@ export function UploadPage() {
     setFileName(file.name)
     setResult(null)
     setErrorMessage('')
+    setFailedFile(null)
     setStages(initialStages())
     patchStage('sheets', 'active')
     setPhase('working')
@@ -142,6 +144,10 @@ export function UploadPage() {
       setResult(payload)
       setPhase('done')
     } catch (error) {
+      // Keep the file so the error state can offer a one-click retry: the
+      // server already cached the understanding result under its hash, so a
+      // retry only re-runs the cheap parse/assemble path.
+      setFailedFile(file)
       setErrorMessage(error instanceof Error ? error.message : '分析失败，请重试。')
       setPhase('error')
     }
@@ -157,6 +163,7 @@ export function UploadPage() {
     setPhase('idle')
     setResult(null)
     setErrorMessage('')
+    setFailedFile(null)
     setStages(initialStages())
     setFileName('')
   }
@@ -364,14 +371,25 @@ export function UploadPage() {
 
         {phase === 'error' && (
           <>
-            <p className="upload-tagline">未能完成分析</p>
+            <p className="upload-tagline">
+              {failedFile ? `「${failedFile.name}」未能完成分析` : '未能完成分析'}
+            </p>
             <div className="notice error-notice">
               <p>{errorMessage}</p>
             </div>
             <div className="upload-actions">
+              {failedFile && (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => void startUpload(failedFile)}
+                >
+                  重试该文件
+                </button>
+              )}
               <button
                 type="button"
-                className="btn btn-primary"
+                className={failedFile ? 'btn btn-secondary' : 'btn btn-primary'}
                 onClick={() => inputRef.current?.click()}
               >
                 重新选择文件

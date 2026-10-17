@@ -11,12 +11,15 @@ from __future__ import annotations
 
 import io
 import json
+from types import SimpleNamespace
 
 import openpyxl
 import pytest
 from fastapi.testclient import TestClient
 
 from backend.api.main import app
+from backend.storage.db import SessionLocal
+from backend.storage.repositories import app_data_repository, model_repository
 from backend.understanding import confirmation
 from backend.understanding.confirmation import (
     ConfirmDecisions,
@@ -391,3 +394,84 @@ def test_apply_link_decisions_unit():
                 "ghost": LinkDecisionPayload(decision="rejected"),
             },
         )
+
+
+def test_confirm_rolls_back_model_when_row_write_fails(monkeypatch):
+    """确认阶段原子化：业务数据写入失败时，模型版本必须一起回滚。
+
+    This is the counterpart of the "records show 0 after re-upload" bug: a
+    half-applied confirm (new model version, stale or missing rows) must be
+    impossible, so both writes share one transaction.
+    """
+    result = _parse_result()
+    decisions = _decisions(result)
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("模拟业务数据写入失败")
+
+    monkeypatch.setattr(app_data_repository, "upsert_records", boom)
+
+    db = SessionLocal()
+    try:
+        with pytest.raises(RuntimeError, match="模拟业务数据写入失败"):
+            confirmation.confirm_workbook(db, "台账.xlsx", _xlsx_bytes(), decisions)
+    finally:
+        db.close()
+
+    db = SessionLocal()
+    try:
+        assert (
+            model_repository.get_current(
+                db, confirmation.WORKSPACE_APP_KEY, raise_if_missing=False
+            )
+            is None
+        )
+        assert app_data_repository.get_records(db, confirmation.WORKSPACE_APP_KEY) is None
+    finally:
+        db.close()
+
+
+def test_confirm_version_race_returns_409(monkeypatch):
+    """并发确认防护：版本号被别处推进时返回 409，而不是裸 500。"""
+    result = _parse_result()
+    assert _confirm(result).status_code == 200
+
+    # Simulate a competing confirm that read the same (now stale) version.
+    monkeypatch.setattr(
+        model_repository,
+        "get_current",
+        lambda _db, _app_key, **_kwargs: SimpleNamespace(version=0),
+    )
+    raced = _confirm(result)
+    assert raced.status_code == 409, raced.text
+    # The losing write left no trace: version 1 is still the only one.
+    versions = client.get("/api/v1/models/workspace/versions").json()
+    assert [v["version"] for v in versions] == [1]
+
+
+def test_confirm_outcome_is_observable(caplog: pytest.LogCaptureFixture):
+    """确认生成的结果必须留痕：成功记 INFO，被拒记 WARNING。"""
+    caplog.set_level("INFO", logger="zsheet")
+
+    # Blocked: nothing acknowledged -> ConfirmError (422) + WARNING log.
+    blocked = client.post(
+        "/api/v1/ingestion/confirm",
+        files={
+            "file": (
+                "台账.xlsx",
+                _xlsx_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        data={"decisions": json.dumps({"acknowledged": [], "links": {}})},
+    )
+    assert blocked.status_code == 422, blocked.text
+    assert any("确认生成被拒" in record.getMessage() for record in caplog.records)
+
+    caplog.clear()
+
+    # Success path -> INFO log carrying the app key and record counts.
+    ok = _confirm(_parse_result())
+    assert ok.status_code == 200, ok.text
+    success = [record.getMessage() for record in caplog.records]
+    assert any("确认生成成功" in message for message in success)

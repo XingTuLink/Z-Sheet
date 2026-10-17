@@ -229,7 +229,9 @@ def test_oversize_sse_upload_returns_413_json(monkeypatch) -> None:
         files={"file": ("big.csv", b"a" * 100, "text/csv")},
     )
     assert response.status_code == 413
-    assert "limit" in response.json()["detail"]
+    # The detail is user-facing, so it must stay Chinese (never raw English).
+    detail = response.json()["detail"]
+    assert "上限" in detail and "MB" in detail
 
 
 # --- 3. Confirm must turn unusable input into an actionable 422 -------------------------

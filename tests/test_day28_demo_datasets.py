@@ -535,7 +535,7 @@ def test_rules_engine_grounds_sales_like_books() -> None:
     for exp, link_count in (
         (EXPECTATIONS[0], 1),  # sales ledger: customer -> order link
         (EXPECTATIONS[1], 0),  # inbound children are unique -> no hard 1:N
-        (EXPECTATIONS[2], 1),  # 恒信地产 has two follow-ups -> 1:N fires
+        (EXPECTATIONS[2], 1),  # 示例地产A has two follow-ups -> 1:N fires
     ):
         workbook = parse_workbook(exp.spec.file_name, _bytes(exp))
         result = add_profiles(workbook, llm_client=None)

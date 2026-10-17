@@ -199,13 +199,17 @@ def test_reject_keeps_model_and_blocks_later_confirm():
     assert client.get("/api/v1/models/default").json()["version"] == 1
 
 
-def test_confirm_is_single_use():
+def test_confirm_is_single_use(caplog: pytest.LogCaptureFixture):
+    caplog.set_level("INFO", logger="zsheet")
     _import()
     session_id = _preview(FIELD_ADD_RESPONSE).json()["session_id"]
     assert _confirm("default", session_id).status_code == 200
     second = _confirm("default", session_id)
     assert second.status_code == 409
     assert client.get("/api/v1/models/default").json()["version"] == 2
+    # A duplicate confirm must leave a trace so operators can spot double-click
+    # or retry storms rather than only seeing a bare 409.
+    assert any("补丁操作被拒" in record.getMessage() for record in caplog.records)
 
 
 def test_begin_confirm_claims_a_pending_preview_exactly_once():
