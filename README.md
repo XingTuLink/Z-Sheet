@@ -178,7 +178,7 @@ Z-Sheet 走的是另一条更轻的路径：**你手里那份已经用了很久�
 **交付与运维**
 
 - 单容器（FastAPI 同时提供 API 与构建后的 SPA）、Alembic 自动迁移、SQLite 数据卷、容器健康检查与自动重启
-- 内置演示系统（销售管理）与 4 份真实感演示数据集（`examples/demo_data/`）
+- 内置演示系统（销售管理）与 10 份真实感演示数据集（`examples/demo_data/`，覆盖销售、库存、客户跟进、人员登记、采购、固定资产、项目、生产、人事、物流）
 
 </details>
 
@@ -313,7 +313,7 @@ backend/runtime         渲染运行时引导（model + data）
 backend/api             FastAPI 路由（解析 / 确认 / 模型管理 / Patch / 运行时 / 发布）
 migrations              Alembic 迁移
 frontend/src/renderer   类型驱动的确定性渲染（View Resolver + 视图组件）
-examples                演示模型、种子数据与 4 份演示 Excel 数据集
+examples                演示模型、种子数据与 10 份演示 Excel 数据集
 docker                  镜像与入口脚本
 ```
 

@@ -518,9 +518,9 @@ def test_sales_ledger_streams_real_stage_counts() -> None:
 # --- 2. rules engine: offline fallback never crashes, sales-like books ground ----------
 
 
-@pytest.mark.parametrize("exp", EXPECTATIONS, ids=lambda e: e.spec.file_name)
-def test_rules_engine_survives_every_dataset(exp: DatasetExpectation) -> None:
-    workbook = parse_workbook(exp.spec.file_name, _bytes(exp))
+@pytest.mark.parametrize("spec", demo.DATASETS, ids=lambda s: s.file_name)
+def test_rules_engine_survives_every_dataset(spec: Any) -> None:
+    workbook = parse_workbook(spec.file_name, demo.dataset_bytes(spec))
     result = add_profiles(workbook, llm_client=None)
     assert result.understanding_engine == "rules"
     if result.business_model is not None:
