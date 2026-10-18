@@ -8,7 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from backend.ai.provider import LLMConfig
 
-PROJECT_VERSION = "0.1.0-alpha.2"
+PROJECT_VERSION = "0.1.0-beta.1"
 DEFAULT_DEV_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",

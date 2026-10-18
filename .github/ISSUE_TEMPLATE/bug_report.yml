@@ -15,6 +15,8 @@ body:
       label: 版本
       description: 你正在使用的版本（`/api/v1/health` 返回 version）
       options:
+        - 0.1.0-beta.1（Docker 镜像）
+        - 0.1.0-beta.1（源码运行）
         - 0.1.0-alpha.2（Docker 镜像）
         - 0.1.0-alpha.2（源码运行）
         - 其他/更早版本（请在下方说明）

@@ -30,12 +30,12 @@
 </p>
 
 <p align="center">
-  <img alt="版本" src="https://img.shields.io/badge/version-0.1.0--alpha.2-blue" />
+  <img alt="版本" src="https://img.shields.io/badge/version-0.1.0--beta.1-blue" />
   <img alt="许可证" src="https://img.shields.io/badge/license-AGPL--3.0-green" />
   <img alt="状态" src="https://img.shields.io/badge/status-experimental-orange" />
 </p>
 
-> **0.1.0-alpha.2 实验性版本** · 核心闭环（Excel → AI 理解 → 人工审查 → 可用系统 → 一句话修改）已跑通 · 面向早期试用者，接口与界面仍可能调整 · 详见 [CHANGELOG.md](./CHANGELOG.md)
+> **0.1.0-beta.1 实验性版本** · 核心闭环（Excel → AI 理解 → 人工审查 → 可用系统 → 一句话修改）已在 10 份不同业务表上验证 · 面向早期试用者，接口与界面仍可能调整 · 详见 [CHANGELOG.md](./CHANGELOG.md)
 
 ---
 
@@ -140,7 +140,7 @@ Z-Sheet 走的是另一条更轻的路径：**你手里那份已经用了很久�
 
 ​                                                    <img src="docs/assets/nl-patch.gif" alt="一句话修改系统：预览后确认生效" width="720" /> 
 
-## 当前能力（0.1.0-alpha.2）
+## 当前能力（0.1.0-beta.1）
 
 想先跑起来的直接跳到[快速开始](#快速开始docker推荐)；以下是逐项能力，方便评估。
 
