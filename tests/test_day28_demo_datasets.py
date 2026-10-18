@@ -436,6 +436,18 @@ def _assert_healthy(model: BusinessModel) -> None:
         assert nav.view in view_keys
 
 
+def _column_values(plan: EntityPlan, column: str) -> set[str]:
+    pos = plan.sheet.columns.index(column)
+    values: set[str] = set()
+    for row in plan.sheet.rows:
+        if pos >= len(row):
+            continue
+        cell = row[pos]
+        if cell is not None and cell.strip():
+            values.add(cell.strip())
+    return values
+
+
 def _review_decisions(result) -> dict[str, Any]:
     plans, _ = build_entity_plans(result)
     model = _model(result)
@@ -604,10 +616,23 @@ def test_llm_understands_each_dataset_into_healthy_model(
         )
         parent_plan = plans[expected_link.from_entity]
         child_plan = plans[expected_link.to_entity]
-        # Links always land on the parent's business key field, not on the
-        # same-named display column the user described.
-        assert link.on.from_ == parent_plan.key_field_key
+        # The link must keep the pair of columns the proposal described: the
+        # overlap was scored there, so a link pointing at any other column
+        # would match nothing. Rewriting the parent side to its business key
+        # field is exactly such a defect.
+        assert link.on.from_ == parent_plan.field_keys[expected_link.on_from_column]
         assert link.on.to == child_plan.field_keys[expected_link.on_to_column]
+        # Value-level guard: the two stored columns must really intersect,
+        # otherwise every related-list block renders as forever empty.
+        from_column = {key: col for col, key in parent_plan.field_keys.items()}[
+            link.on.from_
+        ]
+        to_column = {key: col for col, key in child_plan.field_keys.items()}[
+            link.on.to
+        ]
+        assert _column_values(parent_plan, from_column) & _column_values(
+            child_plan, to_column
+        ), (expected_link.from_entity, from_column, to_column)
         # Spreadsheet guesses are always review-gated (no FK in the source).
         inferred = next(
             cand for cand in result.inferred_links
