@@ -162,3 +162,31 @@ class UnderstandingSessionRecord(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )
+
+
+class AppendBatchRecord(Base):
+    """One append-to-existing-entity operation (preview, apply, rollback).
+
+    The preview is stored server-side under a random id so Confirm only
+    receives the id plus the duplicate-key strategy, never row data it could
+    tamper with. ``result`` keeps the exact inserted row keys and the previous
+    values of overwritten rows, which is what makes a full rollback possible.
+    """
+
+    __tablename__ = "append_batches"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    app_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    entity_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    base_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    new_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    strategy: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )

@@ -149,6 +149,10 @@ class RecordStore(ABC):
         """Whether that identity is already taken."""
 
     @abstractmethod
+    def row_keys(self, app_key: str, entity_key: str) -> set[str]:
+        """Every stored identity of one entity (bulk duplicate detection)."""
+
+    @abstractmethod
     def insert_row(
         self,
         app_key: str,
@@ -244,6 +248,16 @@ class SqlRecordStore(RecordStore):
                 )
             )
             is not None
+        )
+
+    def row_keys(self, app_key: str, entity_key: str) -> set[str]:
+        return set(
+            self._db.scalars(
+                select(BusinessRecord.row_key).where(
+                    BusinessRecord.app_key == app_key,
+                    BusinessRecord.entity_key == entity_key,
+                )
+            ).all()
         )
 
     def insert_row(

@@ -4,6 +4,7 @@ import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 
 import { appApiBase, fetchBootstrap } from '../api/runtime'
 import { BrandLockup, CompanyByline, CompanyFooter, LOGO_SRC } from '../components/Brand'
+import { AppendDataDialog } from './AppendDataDialog'
 import { resolveAppRoute } from './appRoute'
 import { PatchDialog } from './PatchDialog'
 import { PublishDialog } from './PublishDialog'
@@ -14,6 +15,7 @@ export function AppLayout() {
   const location = useLocation()
   const route = resolveAppRoute(location.pathname)
   const [patchOpen, setPatchOpen] = useState(false)
+  const [appendOpen, setAppendOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [publishOpen, setPublishOpen] = useState(false)
   const { data, isLoading, isError, isFetching, refetch } = useQuery({
@@ -83,11 +85,12 @@ export function AppLayout() {
   }
 
   return (
-    <RuntimeProvider
-      key={`${data.app_key}:${data.version}`}
-      bootstrap={data}
-      apiBase={appApiBase(data.app_key)}
-    >
+    <>
+      <RuntimeProvider
+        key={`${data.app_key}:${data.version}`}
+        bootstrap={data}
+        apiBase={appApiBase(data.app_key)}
+      >
       <div className="app-shell">
         <header className="topbar">
           <div className="brand">
@@ -110,6 +113,13 @@ export function AppLayout() {
           <div className="topbar-right">
             {!route.isDemo && (
               <>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-patch-entry"
+                  onClick={() => setAppendOpen(true)}
+                >
+                  追加数据
+                </button>
                 <button
                   type="button"
                   className="btn btn-secondary btn-patch-entry"
@@ -174,6 +184,16 @@ export function AppLayout() {
           onClose={() => setPublishOpen(false)}
         />
       </div>
-    </RuntimeProvider>
+      </RuntimeProvider>
+      <AppendDataDialog
+        open={appendOpen}
+        appKey={route.appKey}
+        entities={data.model.entities.map((entity) => ({
+          key: entity.key,
+          name: entity.name,
+        }))}
+        onClose={() => setAppendOpen(false)}
+      />
+    </>
   )
 }

@@ -14,6 +14,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from backend.ai.provider import mask_key
 from backend.api.routes import (
+    appends,
     health,
     ingestion,
     models,
@@ -85,6 +86,7 @@ def create_app() -> FastAPI:
     app.include_router(models.router)
     app.include_router(runtime.router)
     app.include_router(ingestion.router)
+    app.include_router(appends.router)
     app.include_router(patch.router)
     app.include_router(publications.management_router)
     app.include_router(publications.public_router)

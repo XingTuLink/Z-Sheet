@@ -219,6 +219,7 @@ def apply_patch_as_new_version(
     source_request: str | None = None,
     operator: str = "local",
     enforce_business_safety: bool = False,
+    commit: bool = True,
 ) -> ModelVersionRecord:
     """Validate + apply a raw JSON Patch and append a new version atomically.
 
@@ -247,7 +248,7 @@ def apply_patch_as_new_version(
         source_request=source_request,
         validation_status="passed",
     )
-    return _append_version(db, record)
+    return _append_version(db, record, commit=commit)
 
 
 def restore_version(
@@ -256,6 +257,7 @@ def restore_version(
     target_version: int,
     *,
     operator: str = "local",
+    commit: bool = True,
 ) -> ModelVersionRecord:
     """Rollback: append a new version that copies a historical snapshot.
 
@@ -284,7 +286,7 @@ def restore_version(
         source_request=f"回滚到版本 {target_version}",
         validation_status="passed",
     )
-    return _append_version(db, record)
+    return _append_version(db, record, commit=commit)
 
 
 __all__ = [

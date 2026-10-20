@@ -2644,6 +2644,230 @@ a:hover {
   margin-top: 18px;
 }
 
+/* ---------- Append data dialog ---------- */
+
+.append-dialog {
+  width: 640px;
+}
+
+.append-hint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.append-form-row {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.append-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-muted);
+}
+
+.append-field select {
+  min-width: 150px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  color: var(--color-text);
+  font: inherit;
+}
+
+.append-file-field {
+  flex: 1;
+  min-width: 180px;
+}
+
+.append-file-field input[type='file'] {
+  height: 34px;
+  font-size: 12px;
+  color: var(--color-muted);
+}
+
+.append-preview-btn {
+  height: 34px;
+}
+
+.append-notice {
+  margin: 0;
+  padding: 9px 12px;
+  border: 1px solid var(--color-primary-line);
+  border-radius: var(--radius-sm);
+  background: var(--color-primary-soft);
+  font-size: 12px;
+  color: var(--color-primary-hover);
+}
+
+.append-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-head);
+}
+
+.append-summary-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.append-summary-label {
+  font-size: 12px;
+  color: var(--color-muted);
+}
+
+.append-new-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--color-muted);
+}
+
+.append-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.append-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid var(--color-primary-line);
+  border-radius: 999px;
+  background: var(--color-primary-soft);
+  font-size: 12px;
+  color: var(--color-primary-hover);
+}
+
+.append-chip em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--color-muted);
+}
+
+.append-detail {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.append-strategies {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.append-strategy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.append-strategy input {
+  margin: 0 0 2px;
+}
+
+.append-strategy.is-active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.append-strategy-label {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.append-history {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+
+.append-history-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.append-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.append-history-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.append-history-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.append-history-file {
+  overflow: hidden;
+  font-size: 13px;
+  color: var(--color-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.append-history-meta {
+  font-size: 11px;
+  color: var(--color-muted);
+}
+
+.append-rollback-btn {
+  flex-shrink: 0;
+}
+
+@media (max-width: 640px) {
+  .append-strategies,
+  .append-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .append-history-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
 /* ---------- Version history dialog (Day 26) ---------- */
 
 .history-dialog {
