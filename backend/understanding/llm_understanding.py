@@ -30,7 +30,7 @@ from backend.ingestion.schemas import ParsedSheet
 from backend.logging_config import get_logger
 
 from .model_assembly import EntityPlan
-from .naming import unique_field_keys
+from .naming import keys_for_sheet, sanitize_key
 from .schemas import (
     CONFIDENCE_HIGH,
     InferredEntity,
@@ -93,6 +93,9 @@ SYSTEM_PROMPT = """\
    每个实体有且仅有一个 role=identifier 的列，就是 key_field；
    电话、身份证号、银行账号等虽然唯一，但不是业务主键，role 用 text/dimension。
 3. fields 必须覆盖工作表的每一列：
+   - key：该列语义化的英文小写 snake_case 名称（例如 industry、city、order_status、
+     unit_price、payment_amount）；同一实体内不得重复；禁止使用 field_1、column_2
+     这类占位名，也禁止直接用拼音。
    - type 取值：string | number | money | date | enum | phone
      · money：金额、价格、费用、成本、工资等货币数值
      · date：日期/时间列（样例形如 2026-01-01、2026/1/1）
@@ -132,8 +135,9 @@ SYSTEM_PROMPT = """\
       "needs_review": false,
       "reason": "一句话中文理由",
       "fields": [
-        {"column": "姓名", "type": "string", "role": "identifier",
-         "confidence": 0.9, "needs_review": false, "enum_values": [], "reason": ""}
+        {"column": "姓名", "key": "reviewer_name", "type": "string",
+         "role": "identifier", "confidence": 0.9, "needs_review": false,
+         "enum_values": [], "reason": ""}
       ]
     }
   ],
@@ -155,6 +159,7 @@ SYSTEM_PROMPT = """\
 
 class LLMFieldSpec(BaseModel):
     column: str
+    key: str = ""
     type: str
     role: str = "text"
     confidence: float = 0.8
@@ -335,6 +340,7 @@ def _merge_field(
     return InferredField(
         column=column,
         type=ftype,  # type: ignore[arg-type]
+        key=sanitize_key(spec.key),
         confidence=confidence,
         needs_review=needs_review,
         signals=signals,
@@ -610,8 +616,8 @@ def build_llm_links(
         # side to its key field would leave the evidence and the link pointing
         # at different columns, and no child row could ever match.
         on_from_field = parent.field_keys[on_from_column]
-        field_keys = unique_field_keys(child.sheet.columns)[0]
-        on_to_field = dict(zip(child.sheet.columns, field_keys, strict=True))[
+        child_field_keys = keys_for_sheet(child.sheet)[0]
+        on_to_field = dict(zip(child.sheet.columns, child_field_keys, strict=True))[
             on_to_column
         ]
 

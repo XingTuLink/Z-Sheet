@@ -2,6 +2,7 @@ import { useRef, useState, type ChangeEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
 import {
+  parseMultiple,
   parseWorkbookWithProgress,
   saveUnderstandingResult,
   TEMPLATE_URL,
@@ -9,13 +10,15 @@ import {
   type StageKey,
   type UnderstandingResult,
 } from '../api/ingestion'
-import { setLastUploadedFile } from '../api/sessionStore'
+import { setLastUploadedFiles } from '../api/sessionStore'
 import { BrandLockup, CompanyFooter } from '../components/Brand'
 
 type Phase = 'idle' | 'working' | 'done' | 'error'
 type StageState = 'pending' | 'active' | 'done'
 
 const MAX_BYTES = 20 * 1024 * 1024
+const MAX_MULTI_BYTES = 60 * 1024 * 1024
+const MAX_FILES = 10
 const ACCEPT = '.xlsx,.csv'
 
 interface StageDef {
@@ -79,12 +82,14 @@ export function UploadPage() {
   const navigate = useNavigate()
   const [phase, setPhase] = useState<Phase>('idle')
   const [stages, setStages] = useState<StageMap>(initialStages)
-  const [fileName, setFileName] = useState('')
+  const [fileNames, setFileNames] = useState<string[]>([])
   const [result, setResult] = useState<UnderstandingResult | null>(null)
   const [errorMessage, setErrorMessage] = useState('')
-  const [failedFile, setFailedFile] = useState<File | null>(null)
+  const [failedFiles, setFailedFiles] = useState<File[]>([])
   const [dragging, setDragging] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+
+  const isMulti = fileNames.length > 1
 
   const patchStage = (key: StageKey, status: StageState, count?: number) => {
     setStages((prev) => ({
@@ -96,66 +101,100 @@ export function UploadPage() {
     }))
   }
 
-  const startUpload = async (file: File) => {
-    if (!isSupportedFile(file)) {
-      setErrorMessage('目前支持 .xlsx 与 .csv 文件，请重新选择。')
-      setPhase('error')
-      return
+  const validate = (files: File[]): string => {
+    if (files.length > MAX_FILES) {
+      return `一次最多上传 ${MAX_FILES} 个文件，请分批导入。`
     }
-    if (file.size > MAX_BYTES) {
-      setErrorMessage('文件超过 20 MB 上限，请拆分或精简后再上传。')
+    for (const file of files) {
+      if (!isSupportedFile(file)) {
+        return `「${file.name}」格式不支持，目前仅支持 .xlsx 与 .csv。`
+      }
+      if (file.size > MAX_BYTES) {
+        return `「${file.name}」超过 20 MB 上限，请拆分或精简后再上传。`
+      }
+    }
+    const total = files.reduce((sum, file) => sum + file.size, 0)
+    if (total > MAX_MULTI_BYTES) {
+      return '多个文件合计超过 60 MB 上限，请分批导入。'
+    }
+    return ''
+  }
+
+  const startUpload = async (files: File[]) => {
+    if (files.length === 0) return
+    const invalid = validate(files)
+    if (invalid) {
+      setErrorMessage(invalid)
       setPhase('error')
       return
     }
 
-    setFileName(file.name)
+    setFileNames(files.map((file) => file.name))
     setResult(null)
     setErrorMessage('')
-    setFailedFile(null)
+    setFailedFiles([])
     setStages(initialStages())
-    patchStage('sheets', 'active')
     setPhase('working')
 
     try {
-      const nextStage: Record<StageKey, StageKey | null> = {
-        sheets: 'fields',
-        fields: 'entities',
-        entities: 'relations',
-        relations: 'assemble',
-        assemble: null,
-      }
-      const onStage = (event: StageEvent) => {
-        if (event.key === 'assemble') {
-          // The assemble frame is an in-progress marker; the result frame
-          // arriving is what completes this stage.
-          patchStage('assemble', 'active')
-          return
+      let payload: UnderstandingResult
+      if (files.length === 1) {
+        patchStage('sheets', 'active')
+        const nextStage: Record<StageKey, StageKey | null> = {
+          sheets: 'fields',
+          fields: 'entities',
+          entities: 'relations',
+          relations: 'assemble',
+          assemble: null,
         }
-        patchStage(event.key, 'done', event.count)
-        const following = nextStage[event.key]
-        if (following) patchStage(following, 'active')
+        const onStage = (event: StageEvent) => {
+          if (event.key === 'assemble') {
+            // The assemble frame is an in-progress marker; the result frame
+            // arriving is what completes this stage.
+            patchStage('assemble', 'active')
+            return
+          }
+          patchStage(event.key, 'done', event.count)
+          const following = nextStage[event.key]
+          if (following) patchStage(following, 'active')
+        }
+        payload = await parseWorkbookWithProgress(files[0], onStage)
+        patchStage('assemble', 'done')
+      } else {
+        // Several files are understood as one workbook in a single request;
+        // there is no per-stage stream to show yet.
+        payload = await parseMultiple(files)
+        patchStage('sheets', 'done', payload.sheets.length)
+        patchStage(
+          'fields',
+          'done',
+          payload.business_model?.entities.reduce(
+            (total, entity) => total + entity.fields.length,
+            0,
+          ) ?? 0,
+        )
+        patchStage('entities', 'done', payload.business_model?.entities.length ?? 0)
+        patchStage('relations', 'done', payload.inferred_links.length)
+        patchStage('assemble', 'done')
       }
-
-      const payload = await parseWorkbookWithProgress(file, onStage)
-      patchStage('assemble', 'done')
       saveUnderstandingResult(payload)
-      // Day 15: Confirm re-sends this same file; keep it until the tab closes.
-      setLastUploadedFile(file)
+      // Confirm re-sends the same files; keep them until the tab closes.
+      setLastUploadedFiles(files)
       setResult(payload)
       setPhase('done')
     } catch (error) {
-      // Keep the file so the error state can offer a one-click retry: the
-      // server already cached the understanding result under its hash, so a
-      // retry only re-runs the cheap parse/assemble path.
-      setFailedFile(file)
+      // Keep the files so the error state can offer a one-click retry: the
+      // server already cached the understanding result under their hashes, so
+      // a retry only re-runs the cheap parse/assemble path.
+      setFailedFiles(files)
       setErrorMessage(error instanceof Error ? error.message : '分析失败，请重试。')
       setPhase('error')
     }
   }
 
   const onInputChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (file) void startUpload(file)
+    const files = Array.from(event.target.files ?? [])
+    if (files.length > 0) void startUpload(files)
     event.target.value = ''
   }
 
@@ -163,9 +202,9 @@ export function UploadPage() {
     setPhase('idle')
     setResult(null)
     setErrorMessage('')
-    setFailedFile(null)
+    setFailedFiles([])
     setStages(initialStages())
-    setFileName('')
+    setFileNames([])
   }
 
   return (
@@ -177,12 +216,13 @@ export function UploadPage() {
 
         {phase === 'idle' && (
           <>
-            <p className="upload-tagline">上传一张 Excel，一分钟内变成一个能用的系统。</p>
+            <p className="upload-tagline">上传 Excel，一分钟内变成一个能用的系统。</p>
             <input
               ref={inputRef}
               type="file"
               accept={ACCEPT}
               className="upload-input"
+              multiple
               onChange={onInputChange}
             />
             <div
@@ -201,12 +241,14 @@ export function UploadPage() {
               onDrop={(event) => {
                 event.preventDefault()
                 setDragging(false)
-                const file = event.dataTransfer.files?.[0]
-                if (file) void startUpload(file)
+                const files = Array.from(event.dataTransfer.files ?? [])
+                if (files.length > 0) void startUpload(files)
               }}
             >
               <p className="dropzone-title">点击选择，或将文件拖拽到此处</p>
-              <p className="dropzone-sub">支持 .xlsx（多工作表）与 .csv，单个文件不超过 20 MB</p>
+              <p className="dropzone-sub">
+                支持 .xlsx（多工作表）与 .csv；可一次选择多个文件，最多 10 个、合计不超过 60 MB
+              </p>
             </div>
             <p className="upload-note">
               文件仅在当前环境解析，不上传任何业务数据到云端。
@@ -219,7 +261,11 @@ export function UploadPage() {
 
         {phase === 'working' && (
           <>
-            <p className="upload-tagline">正在理解「{fileName}」</p>
+            <p className="upload-tagline">
+              {isMulti
+                ? `正在理解「${fileNames[0]}」等 ${fileNames.length} 个文件`
+                : `正在理解「${fileNames[0] ?? ''}」`}
+            </p>
             <ul className="stage-list">
               {STAGE_DEFS.map((def) => {
                 const state = stages[def.key]
@@ -300,6 +346,7 @@ export function UploadPage() {
               type="file"
               accept={ACCEPT}
               className="upload-input"
+              multiple
               onChange={onInputChange}
             />
           </>
@@ -312,7 +359,11 @@ export function UploadPage() {
               <span className="result-name">
                 {result.business_model?.app.name ?? '未命名应用'}
               </span>
-              <span className="muted">{result.file_name}</span>
+              <span className="muted">
+                {isMulti
+                  ? `${fileNames[0]} 等 ${fileNames.length} 个文件`
+                  : result.file_name}
+              </span>
             </div>
             <dl className="summary-grid">
               <div className="summary-item">
@@ -360,7 +411,7 @@ export function UploadPage() {
                 查看理解结果
               </button>
               <button type="button" className="btn btn-secondary" onClick={reset}>
-                再上传一个文件
+                再上传文件
               </button>
             </div>
             <p className="upload-demo">
@@ -372,24 +423,28 @@ export function UploadPage() {
         {phase === 'error' && (
           <>
             <p className="upload-tagline">
-              {failedFile ? `「${failedFile.name}」未能完成分析` : '未能完成分析'}
+              {failedFiles.length === 1
+                ? `「${failedFiles[0].name}」未能完成分析`
+                : failedFiles.length > 1
+                  ? `${failedFiles.length} 个文件未能完成分析`
+                  : '未能完成分析'}
             </p>
             <div className="notice error-notice">
               <p>{errorMessage}</p>
             </div>
             <div className="upload-actions">
-              {failedFile && (
+              {failedFiles.length > 0 && (
                 <button
                   type="button"
                   className="btn btn-primary"
-                  onClick={() => void startUpload(failedFile)}
+                  onClick={() => void startUpload(failedFiles)}
                 >
-                  重试该文件
+                  重试
                 </button>
               )}
               <button
                 type="button"
-                className={failedFile ? 'btn btn-secondary' : 'btn btn-primary'}
+                className={failedFiles.length > 0 ? 'btn btn-secondary' : 'btn btn-primary'}
                 onClick={() => inputRef.current?.click()}
               >
                 重新选择文件
@@ -403,6 +458,7 @@ export function UploadPage() {
               type="file"
               accept={ACCEPT}
               className="upload-input"
+              multiple
               onChange={onInputChange}
             />
           </>

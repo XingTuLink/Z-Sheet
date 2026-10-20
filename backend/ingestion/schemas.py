@@ -18,6 +18,9 @@ class ParsedSheet(BaseModel):
     """One discovered table (an XLSX worksheet or the sole CSV table)."""
 
     name: str
+    # Set when several uploads are merged into one parsing run, so a sheet can
+    # always be traced back to the file the user chose.
+    source_file: str | None = None
     # Empty sheets are reported, not silently dropped, so callers can show
     # exactly what the workbook contained.
     is_empty: bool = False
@@ -35,5 +38,6 @@ class ParsedSheet(BaseModel):
 
 class ParsedWorkbook(BaseModel):
     file_name: str
-    file_type: Literal["xlsx", "csv"]
+    # "mixed" only occurs when several uploads are parsed as one workbook.
+    file_type: Literal["xlsx", "csv", "mixed"]
     sheets: list[ParsedSheet]

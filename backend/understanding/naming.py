@@ -10,6 +10,8 @@ glossary misses for a human to rename.
 
 from __future__ import annotations
 
+import re
+
 # Chinese/English business column glossary for the V0.1 sales scenario.
 # Match is exact after stripping whitespace, case-insensitive for ASCII.
 FIELD_NAME_TO_KEY: dict[str, str] = {
@@ -65,6 +67,60 @@ def unique_field_keys(columns: list[str]) -> tuple[list[str], list[bool]]:
         keys.append(key)
         hits.append(hit)
     return keys, hits
+
+
+def sanitize_key(raw: str | None) -> str | None:
+    """Force an arbitrary proposal into the assembler's field-key namespace."""
+    if not raw:
+        return None
+    key = re.sub(r"[^a-z0-9]+", "_", raw.strip().lower()).strip("_")
+    if not key:
+        return None
+    if key[0].isdigit():
+        key = f"f_{key}"
+    return key[:48]
+
+
+def keys_for_columns(
+    columns: list[str],
+    proposed: dict[str, str | None] | None = None,
+) -> tuple[list[str], list[bool]]:
+    """Key per column, preferring model-proposed names over the glossary.
+
+    ``proposed`` maps column name to a semantic key. Invalid or duplicate
+    proposals fall back to the glossary, then to the position placeholder, so
+    every column always gets a unique valid key.
+    """
+    proposals = proposed or {}
+    keys: list[str] = []
+    hits: list[bool] = []
+    used: set[str] = set()
+    for position, column in enumerate(columns):
+        key = sanitize_key(proposals.get(column))
+        hit = key is not None
+        if key is None:
+            key, hit = field_key(column, position)
+        if key in used:
+            suffix = 2
+            while f"{key}_{suffix}" in used:
+                suffix += 1
+            key = f"{key}_{suffix}"
+            hit = False
+        used.add(key)
+        keys.append(key)
+        hits.append(hit)
+    return keys, hits
+
+
+def keys_for_sheet(sheet: object) -> tuple[list[str], list[bool]]:
+    """Field keys for a profiled sheet, using the keys inferred per column."""
+    columns = [str(column) for column in getattr(sheet, "columns", [])]
+    proposed = {
+        str(field.column): getattr(field, "key", None)
+        for field in getattr(sheet, "inferred_fields", [])
+        if getattr(field, "key", None)
+    }
+    return keys_for_columns(columns, proposed)
 
 
 def unique_entity_keys(base_keys: list[str]) -> list[str]:

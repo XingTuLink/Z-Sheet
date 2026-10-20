@@ -1,15 +1,23 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
 import {
+  confirmMultiple,
   confirmWorkbook,
+  defaultImportPlan,
+  emptyReviewState,
+  loadImportPlan,
   loadReviewState,
   loadUnderstandingResult,
+  previewImport,
+  saveImportPlan,
   saveReviewState,
+  saveUnderstandingResult,
   TEMPLATE_URL,
   type FieldRole,
   type FieldType,
+  type ImportPlan,
   type InferredLink,
   type LinkReview,
   type ReviewDecision,
@@ -20,8 +28,9 @@ import {
   type UnderstandingSheet,
 } from '../api/ingestion'
 import { WORKSPACE_APP_KEY } from '../api/runtime'
-import { getLastUploadedFile } from '../api/sessionStore'
+import { getLastUploadedFiles } from '../api/sessionStore'
 import { BrandLockup, CompanyByline } from '../components/Brand'
+import { ImportPlanPanel } from '../components/ImportPlanPanel'
 
 const TYPE_LABELS: Record<FieldType, string> = {
   string: '文本',
@@ -81,6 +90,14 @@ function fieldAckId(entityKey: string, fieldKey: string) {
 // a metric id can never collide with an entity/field id.
 function metricAckId(metricKey: string) {
   return `metric:${metricKey}`
+}
+
+/** Stable signature of a plan's sheet selection and merge groups. */
+function planStructure(plan: ImportPlan): string {
+  const groups = plan.groups
+    .map((group) => [...group.sheets].sort().join('+'))
+    .sort()
+  return `${[...plan.sheets].sort().join(',')}|${groups.join(';')}`
 }
 
 const METRIC_OP_LABELS: Record<string, string> = {
@@ -539,12 +556,18 @@ function RelationSection({ result, review }: { result: UnderstandingResult; revi
 function DroppedSheetsSection({
   result,
   assembledSheets,
+  mergedSheetIds,
 }: {
   result: UnderstandingResult
   assembledSheets: Set<string>
+  // Sheets merged into an entity are represented by the group's first sheet,
+  // so they are not "dropped" even though no entity names them directly.
+  mergedSheetIds: Set<string>
 }) {
   const dropped = result.sheets.filter(
-    (sheet) => !assembledSheets.has(sheet.name),
+    (sheet) =>
+      !assembledSheets.has(sheet.name) &&
+      !(sheet.id && mergedSheetIds.has(sheet.id)),
   )
   if (dropped.length === 0) return null
 
@@ -556,9 +579,12 @@ function DroppedSheetsSection({
       </h2>
       <ul className="dropped-list">
         {dropped.map((sheet) => (
-          <li key={sheet.name} className="dropped-item">
+          <li key={sheet.id ?? sheet.name} className="dropped-item">
             <div className="dropped-head">
-              <span className="dropped-name">{sheet.name}</span>
+              <span className="dropped-name">{sheet.display_name ?? sheet.name}</span>
+              {sheet.file_name && (
+                <span className="muted dropped-meta">{sheet.file_name}</span>
+              )}
               <span className="tag tag-dropped">{sheetDropReason(sheet)}</span>
             </div>
             <p className="muted dropped-meta">
@@ -602,13 +628,25 @@ function SheetWarningsSection({ result }: { result: UnderstandingResult }) {
 export function UnderstandingPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const result = useMemo(() => loadUnderstandingResult(), [])
+  const initialResult = useMemo(() => loadUnderstandingResult(), [])
+  const [result, setResult] = useState<UnderstandingResult | null>(initialResult)
   const [review, setReview] = useState<ReviewState>(() => loadReviewState())
+  const [plan, setPlan] = useState<ImportPlan | null>(() => loadImportPlan())
+  const [planBusy, setPlanBusy] = useState(false)
+  const [planError, setPlanError] = useState('')
+  const [planNotice, setPlanNotice] = useState('')
   const [confirming, setConfirming] = useState(false)
   const [confirmError, setConfirmError] = useState('')
-  // Non-reactive on purpose: the File is module memory set right after
-  // upload; a refresh clears it and the bar tells the user to re-upload.
-  const uploadedFile = getLastUploadedFile()
+  // The plan the server proposed at parse time, kept for "restore defaults"
+  // even after the user has edited groups/conflicts.
+  const recommendedPlan = useRef<ImportPlan | null>(
+    initialResult ? defaultImportPlan(initialResult) : null,
+  )
+  // Guards against out-of-order preview responses when the user clicks fast.
+  const previewSeq = useRef(0)
+  // Non-reactive on purpose: the Files are module memory set right after
+  // upload; a refresh clears them and the bar tells the user to re-upload.
+  const uploadedFiles = getLastUploadedFiles()
 
   if (!result || !result.business_model) {
     return (
@@ -636,10 +674,15 @@ export function UnderstandingPage() {
   }
 
   const entities = result.business_model.entities
+  const isMulti = Boolean(result.files)
+  const activePlan = plan ?? defaultImportPlan(result)
   const assembledSheets = new Set(
     entities
       .map((entity) => entity.source?.sheet)
       .filter((sheet): sheet is string => Boolean(sheet)),
+  )
+  const mergedSheetIds = new Set(
+    (result.merges ?? []).flatMap((merge) => merge.sheet_ids),
   )
 
   // Entity confidence lives on the sheet-level inference; join via source sheet.
@@ -715,6 +758,80 @@ export function UnderstandingPage() {
     })
   }
 
+  const applyPlan = async (next: ImportPlan) => {
+    setPlan(next)
+    saveImportPlan(next)
+    if (!isMulti || uploadedFiles.length === 0) return
+
+    const seq = ++previewSeq.current
+    // Keep what the page currently shows so a failed preview can roll back.
+    const previous = activePlan
+    setPlanBusy(true)
+    setPlanError('')
+    setPlanNotice('')
+    try {
+      const preview = await previewImport(uploadedFiles, next)
+      if (seq !== previewSeq.current) return
+      // The server recomputes entities/links/conflicts for the new scheme;
+      // swap in that result and keep the choice for every conflict it found.
+      const nextResult: UnderstandingResult | null = result
+        ? {
+            ...result,
+            sheets: preview.sheets,
+            merges: preview.merges,
+            conflicts: preview.conflicts,
+            assembly_notes: preview.assembly_notes,
+            inferred_links: preview.inferred_links,
+            business_model: preview.business_model,
+            business_model_yaml: preview.business_model_yaml,
+          }
+        : null
+      if (nextResult) setResult(nextResult)
+      const conflicts = Object.fromEntries(
+        preview.conflicts.map((conflict) => [
+          conflict.id,
+          next.conflicts[conflict.id] ?? conflict.default,
+        ]),
+      )
+      const withDefaults: ImportPlan = {
+        sheets: next.sheets,
+        groups: preview.merges.map((merge) => ({ sheets: merge.sheet_ids })),
+        conflicts,
+      }
+      // Only a changed sheet selection / merge scheme invalidates the review:
+      // entities and links are rebuilt from it, so old acknowledgements no
+      // longer point at anything meaningful. A conflict choice keeps them.
+      const structureChanged = planStructure(previous) !== planStructure(withDefaults)
+      if (structureChanged) {
+        // Persist the regenerated sheets so a refresh keeps the current view;
+        // this also drops stored review decisions that no longer apply.
+        if (nextResult) saveUnderstandingResult(nextResult)
+        const cleared = emptyReviewState()
+        setReview(cleared)
+        saveReviewState(cleared)
+        setPlanNotice('导入方案已更新，请重新处理下方待确认队列。')
+      } else {
+        setPlanNotice('冲突处理方式已更新。')
+      }
+      setPlan(withDefaults)
+      saveImportPlan(withDefaults)
+    } catch (error) {
+      if (seq === previewSeq.current) {
+        setPlan(previous)
+        saveImportPlan(previous)
+        setPlanError(
+          error instanceof Error ? error.message : '更新导入方案失败，请重试。',
+        )
+      }
+    } finally {
+      if (seq === previewSeq.current) setPlanBusy(false)
+    }
+  }
+
+  const resetPlan = () => {
+    void applyPlan(recommendedPlan.current ?? defaultImportPlan(result))
+  }
+
   const acceptAllPending = () => {
     const acknowledged = { ...review.acknowledged }
     for (const entity of entities) {
@@ -745,14 +862,19 @@ export function UnderstandingPage() {
   }
 
   const onConfirm = async () => {
-    if (!uploadedFile || pendingCount > 0 || confirming) return
+    if (uploadedFiles.length === 0 || pendingCount > 0 || confirming || planBusy) return
     setConfirming(true)
     setConfirmError('')
     try {
       // The server reuses the understanding result cached at parse time for
-      // this exact file and only applies the review decisions below; nothing
+      // these exact files and only applies the review decisions below; nothing
       // inferred client-side is trusted.
-      await confirmWorkbook(uploadedFile, review)
+      if (isMulti) {
+        saveImportPlan(activePlan)
+        await confirmMultiple(uploadedFiles, review, activePlan)
+      } else {
+        await confirmWorkbook(uploadedFiles[0], review)
+      }
       // Drop the previously rendered system BEFORE leaving the page: the new
       // confirm replaces both model and rows, so a stale bootstrap (e.g. the
       // previous upload's entity keys) would otherwise briefly render as a
@@ -767,7 +889,8 @@ export function UnderstandingPage() {
     }
   }
 
-  const confirmReady = pendingCount === 0 && Boolean(uploadedFile) && !confirming
+  const confirmReady =
+    pendingCount === 0 && uploadedFiles.length > 0 && !confirming && !planBusy
 
   return (
     <main className="understanding-page">
@@ -778,7 +901,11 @@ export function UnderstandingPage() {
               返回上传
             </Link>
             <h1>{result.business_model.app.name} · 理解结果</h1>
-            <p className="view-sub">{result.file_name}</p>
+            <p className="view-sub">
+              {isMulti && result.files
+                ? `${result.files[0].name} 等 ${result.files.length} 个文件`
+                : result.file_name}
+            </p>
           </div>
           <div className="understanding-stats">
             <span
@@ -821,6 +948,39 @@ export function UnderstandingPage() {
 
         <SheetWarningsSection result={result} />
 
+        {isMulti && result.assembly_notes.length > 0 && (
+          <section className="card understanding-block">
+            <h2 className="block-title">
+              合并与处理说明
+              <span className="muted block-count">
+                多文件导入时的合并与拆分依据
+              </span>
+            </h2>
+            <ul className="queue-list">
+              {result.assembly_notes.map((note) => (
+                <li key={note} className="queue-reason">
+                  {note}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {isMulti && result.files && (
+          <ImportPlanPanel
+            files={result.files}
+            sheets={result.sheets}
+            conflicts={result.conflicts ?? []}
+            plan={activePlan}
+            hasFiles={uploadedFiles.length > 0}
+            busy={planBusy}
+            error={planError}
+            notice={planNotice}
+            onChange={(next) => void applyPlan(next)}
+            onReset={resetPlan}
+          />
+        )}
+
         <ReviewQueue
           result={result}
           entityConfidence={entityConfidence}
@@ -853,7 +1013,11 @@ export function UnderstandingPage() {
         />
 
         <RelationSection result={result} review={review} />
-        <DroppedSheetsSection result={result} assembledSheets={assembledSheets} />
+        <DroppedSheetsSection
+          result={result}
+          assembledSheets={assembledSheets}
+          mergedSheetIds={mergedSheetIds}
+        />
 
         <section className="card confirm-bar" id="confirm">
           <div className="confirm-bar-main">
@@ -863,7 +1027,7 @@ export function UnderstandingPage() {
               {pendingCount > 0 &&
                 ' 待确认队列清零后才能生成，避免不确定的推断直接进入系统。'}
             </p>
-            {!uploadedFile && (
+            {uploadedFiles.length === 0 && (
               <p className="confirm-warning">
                 当前会话已丢失上传的文件（页面可能被刷新过）。请
                 <Link to="/">返回重新上传</Link>

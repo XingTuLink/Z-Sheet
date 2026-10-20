@@ -168,7 +168,7 @@ def test_all_empty_sheets_parse_but_assemble_nothing() -> None:
     assert by_name["空白"]["is_empty"] is True
     for name in ("封面", "仅表头"):
         assert by_name[name]["data_row_count"] == 0
-    assert any("no data rows" in warning for warning in by_name["仅表头"]["warnings"])
+    assert any("没有数据行" in warning for warning in by_name["仅表头"]["warnings"])
 
 
 def test_all_empty_sheets_stream_result_without_error_frame() -> None:
@@ -314,7 +314,7 @@ def test_sequence_footer_rows_are_dropped_as_non_records() -> None:
     sheet = parse_workbook("业务清单.xlsx", content).sheets[0]
     assert sheet.data_row_count == 3
     assert [row[0] for row in sheet.rows] == ["1", "2", "3"]
-    warning = next(w for w in sheet.warnings if "non-record" in w)
+    warning = next(w for w in sheet.warnings if "非记录行" in w)
     assert "序号" in warning
     assert "5" in warning
 
@@ -351,7 +351,7 @@ def test_business_code_column_is_not_a_sequence_filter() -> None:
     )
     sheet = parse_workbook("商品.xlsx", content).sheets[0]
     assert sheet.data_row_count == 3
-    assert not any("non-record" in w for w in sheet.warnings)
+    assert not any("非记录行" in w for w in sheet.warnings)
 
 
 def test_emoji_note_rows_dropped_without_sequence_column() -> None:
@@ -368,7 +368,7 @@ def test_emoji_note_rows_dropped_without_sequence_column() -> None:
     sheet = parse_workbook("项目.xlsx", content).sheets[0]
     assert sheet.data_row_count == 1
     assert sheet.rows[0][0] == "智能客服"
-    assert any("note/banner" in w for w in sheet.warnings)
+    assert any("注释或横幅" in w for w in sheet.warnings)
 
 
 def test_multicolumn_emoji_row_is_kept_without_sequence_column() -> None:

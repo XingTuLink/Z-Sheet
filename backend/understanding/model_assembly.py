@@ -44,7 +44,7 @@ from backend.domain.models import (
 )
 
 from .keywords import PRICE_NAME_KEYWORDS, has_keyword
-from .naming import unique_entity_keys, unique_field_keys
+from .naming import keys_for_sheet, unique_entity_keys
 from .schemas import (
     CONFIDENCE_HIGH,
     InferredField,
@@ -119,7 +119,7 @@ def build_entity_plans(
     for sheet, entity_key in zip(eligible, keys, strict=True):
         entity = sheet.inferred_entity
         assert entity is not None and entity.key_field is not None
-        field_key_list, _ = unique_field_keys(sheet.columns)
+        field_key_list, _ = keys_for_sheet(sheet)
         field_keys = dict(zip(sheet.columns, field_key_list, strict=True))
         plans.append(
             EntityPlan(
@@ -201,7 +201,7 @@ def _build_entity(
     return Entity(
         key=plan.key,
         name=plan.name,
-        source=SourceRef(file=file_name, sheet=plan.sheet.name),
+        source=SourceRef(file=plan.sheet.source_file or file_name, sheet=plan.sheet.name),
         key_field=plan.key_field_key,
         fields=fields,
     )
@@ -481,10 +481,18 @@ def assemble_model(
         plans, entity_map, domain_links, metric_definitions
     )
 
+    # A merged multi-file workbook carries one source file per sheet.
+    source_files = list(
+        dict.fromkeys(
+            sheet.source_file
+            for sheet in workbook.sheets
+            if sheet.source_file
+        )
+    ) or [workbook.file_name]
     return BusinessModel(
         app=AppInfo(
             name=_app_name(workbook.file_name),
-            source=AppSource(files=[workbook.file_name]),
+            source=AppSource(files=source_files),
         ),
         entities=entities,
         links=domain_links,

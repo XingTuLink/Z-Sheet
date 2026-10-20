@@ -70,6 +70,9 @@ class SheetProfile(BaseModel):
 class InferredField(BaseModel):
     column: str
     type: InferredFieldType
+    # Semantic snake_case name proposed by the model; None falls back to the
+    # glossary / position placeholder during assembly.
+    key: str | None = None
     confidence: float
     # Auto-derived from the frozen tiers; medium/low must enter the review
     # queue. High-confidence items may be forced to review, never the reverse.

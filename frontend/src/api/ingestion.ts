@@ -85,6 +85,65 @@ export interface UnderstandingSheet {
     confidence: number
     needs_review: boolean
   } | null
+  // Multi-file imports only: stable handle used by sheet selection and merge
+  // groups, plus the workbook this sheet came from.
+  id?: string
+  file_name?: string
+  display_name?: string
+}
+
+/** One uploaded workbook inside a multi-file import. */
+export interface ImportFileInfo {
+  name: string
+  sheet_count: number
+  row_count: number
+}
+
+/** Sheets a multi-file import suggests merging into one entity. */
+export interface MergeSuggestion {
+  entity_key: string
+  entity_name: string
+  sheet_ids: string[]
+  row_count: number
+}
+
+export type ConflictKind =
+  | 'primary_key_duplicate'
+  | 'field_type_mismatch'
+  | 'enum_values_expanded'
+
+export interface ConflictOption {
+  value: string
+  label: string
+}
+
+/** A merge conflict the user must resolve before generating the system. */
+export interface ImportConflict {
+  id: string
+  kind: ConflictKind
+  entity_key: string
+  entity_name: string
+  field?: string | null
+  message: string
+  options: ConflictOption[]
+  default: string
+}
+
+/** Sheet selection + merge groups + conflict choices. */
+export interface ImportPlan {
+  sheets: string[]
+  groups: { sheets: string[] }[]
+  conflicts: Record<string, string>
+}
+
+export interface PreviewResult {
+  sheets: UnderstandingSheet[]
+  merges: MergeSuggestion[]
+  conflicts: ImportConflict[]
+  assembly_notes: string[]
+  inferred_links: InferredLink[]
+  business_model: UnderstandingResult['business_model']
+  business_model_yaml: string | null
 }
 
 export interface UnderstandingResult {
@@ -103,6 +162,16 @@ export interface UnderstandingResult {
     metrics: UnderstandingMetric[]
   } | null
   business_model_yaml: string | null
+  // Multi-file imports add these; single uploads leave them undefined.
+  files?: ImportFileInfo[]
+  merges?: MergeSuggestion[]
+  conflicts?: ImportConflict[]
+}
+
+export type MultiImportResult = UnderstandingResult & {
+  files: ImportFileInfo[]
+  merges: MergeSuggestion[]
+  conflicts: ImportConflict[]
 }
 
 const STORAGE_KEY = 'zs-understanding-result'
@@ -119,14 +188,22 @@ export function saveUnderstandingResult(result: UnderstandingResult): boolean {
       name: sheet.name,
       is_empty: sheet.is_empty,
       columns: sheet.columns,
+      // Warnings explain skipped rows / unreadable formula cells, so they must
+      // survive the storage trim — they are the main reason a surprising model
+      // can still make sense to the user.
+      warnings: sheet.warnings,
       profile: { row_count: sheet.profile.row_count },
       inferred_entity: sheet.inferred_entity,
+      id: sheet.id,
+      file_name: sheet.file_name,
+      display_name: sheet.display_name,
     })),
   }
   try {
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(slim))
     // A new file invalidates every prior review decision.
     sessionStorage.removeItem(REVIEW_KEY)
+    sessionStorage.removeItem(PLAN_KEY)
     return true
   } catch {
     return false
@@ -194,6 +271,57 @@ export function saveReviewState(state: ReviewState): void {
   } catch {
     // Session storage full/disabled: review actions simply do not survive a
     // reload; the in-memory state still drives the current page.
+  }
+}
+
+const PLAN_KEY = 'zs-import-plan'
+
+/**
+ * Default plan for a multi-file result: every sheet that can become an entity
+ * selected, and the merge suggestions the server proposed kept as-is. Empty or
+ * key-less sheets are left out because the server would drop them anyway.
+ */
+export function defaultImportPlan(result: UnderstandingResult): ImportPlan {
+  return {
+    sheets: result.sheets.flatMap((sheet) =>
+      sheet.id && canAssemble(sheet) ? [sheet.id] : [],
+    ),
+    groups: (result.merges ?? []).map((merge) => ({ sheets: merge.sheet_ids })),
+    conflicts: Object.fromEntries(
+      (result.conflicts ?? []).map((conflict) => [conflict.id, conflict.default]),
+    ),
+  }
+}
+
+function canAssemble(sheet: UnderstandingSheet): boolean {
+  return Boolean(
+    !sheet.is_empty &&
+      sheet.inferred_entity &&
+      sheet.inferred_entity.key !== 'unknown' &&
+      sheet.inferred_entity.key_field,
+  )
+}
+
+export function loadImportPlan(): ImportPlan | null {
+  const raw = sessionStorage.getItem(PLAN_KEY)
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw) as Partial<ImportPlan>
+    return {
+      sheets: parsed.sheets ?? [],
+      groups: parsed.groups ?? [],
+      conflicts: parsed.conflicts ?? {},
+    }
+  } catch {
+    return null
+  }
+}
+
+export function saveImportPlan(plan: ImportPlan): void {
+  try {
+    sessionStorage.setItem(PLAN_KEY, JSON.stringify(plan))
+  } catch {
+    // Losing the plan only means the review page falls back to the defaults.
   }
 }
 
@@ -277,7 +405,43 @@ export async function confirmWorkbook(
   form.append('file', file)
   form.append('decisions', JSON.stringify(decisions))
 
-  const response = await postForm('/api/v1/ingestion/confirm', form)
+  return submitConfirm('/api/v1/ingestion/confirm', form)
+}
+
+/** Submit sheet selection, merge groups and conflict choices. */
+export async function confirmMultiple(
+  files: File[],
+  review: ReviewState,
+  plan: ImportPlan,
+): Promise<ConfirmResponse> {
+  const decisions = {
+    acknowledged: Object.entries(review.acknowledged)
+      .filter(([, acknowledged]) => Boolean(acknowledged))
+      .map(([id]) => id),
+    links: Object.fromEntries(
+      Object.entries(review.links)
+        .filter(([, value]) => value.decision !== undefined)
+        .map(([key, value]) => [
+          key,
+          { decision: value.decision, on_from: value.on_from, on_to: value.on_to },
+        ]),
+    ),
+    sheets: plan.sheets,
+    groups: plan.groups,
+    conflicts: plan.conflicts,
+  }
+
+  const form = new FormData()
+  for (const file of files) form.append('files', file)
+  form.append('decisions', JSON.stringify(decisions))
+  return submitConfirm('/api/v1/ingestion/confirm-multi', form)
+}
+
+async function submitConfirm(
+  url: string,
+  form: FormData,
+): Promise<ConfirmResponse> {
+  const response = await postForm(url, form)
 
   let payload: unknown = null
   try {
@@ -307,6 +471,50 @@ export async function confirmWorkbook(
   }
 
   return payload as ConfirmResponse
+}
+
+/**
+ * Parse several workbooks as one import. Unlike the single-file upload there
+ * is no stage stream yet: the server parses every file and understands the
+ * combined workbook in one request.
+ */
+export async function parseMultiple(files: File[]): Promise<MultiImportResult> {
+  const form = new FormData()
+  for (const file of files) form.append('files', file)
+
+  const response = await postForm('/api/v1/ingestion/parse-multi', form)
+  if (!response.ok) {
+    throw new Error(await errorDetail(response, '分析失败，请稍后重试。'))
+  }
+  return (await response.json()) as MultiImportResult
+}
+
+/**
+ * Recompute entities/links after the user changes sheet selection, merge
+ * groups or conflict choices.
+ */
+export async function previewImport(
+  files: File[],
+  plan: ImportPlan,
+): Promise<PreviewResult> {
+  const form = new FormData()
+  for (const file of files) form.append('files', file)
+  form.append(
+    'options',
+    JSON.stringify({
+      sheets: plan.sheets,
+      // The preview endpoint takes plain id lists; the confirm endpoint keeps
+      // the named `sheets` objects.
+      groups: plan.groups.map((group) => group.sheets),
+      conflicts: plan.conflicts,
+    }),
+  )
+
+  const response = await postForm('/api/v1/ingestion/parse-multi/preview', form)
+  if (!response.ok) {
+    throw new Error(await errorDetail(response, '更新合并方案失败，请稍后重试。'))
+  }
+  return (await response.json()) as PreviewResult
 }
 
 /**

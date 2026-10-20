@@ -103,7 +103,7 @@ def test_xlsx_header_only_sheet_warns():
     content = make_xlsx_bytes({"空表": [["列1", "列2"]]})
     sheet = parse_workbook("h.xlsx", content).sheets[0]
     assert sheet.data_row_count == 0
-    assert any("no data rows" in warning for warning in sheet.warnings)
+    assert any("没有数据行" in warning for warning in sheet.warnings)
 
 
 def test_xlsx_vertical_merged_category_is_forward_filled():
@@ -188,8 +188,8 @@ def test_xlsx_unnamed_and_duplicate_headers_warn():
     )
     sheet = parse_workbook("types.xlsx", content).sheets[0]
     assert sheet.columns == ["名称", "column_2", "名称"]
-    assert any("unnamed" in warning for warning in sheet.warnings)
-    assert any("duplicate" in warning for warning in sheet.warnings)
+    assert any("表头没有名称" in warning for warning in sheet.warnings)
+    assert any("重复" in warning for warning in sheet.warnings)
 
 
 def test_xlsx_two_row_grouped_header_prefixes_duplicate_children():
@@ -216,7 +216,7 @@ def test_xlsx_two_row_grouped_header_prefixes_duplicate_children():
         "退款信息_金额",
     ]
     assert sheet.rows == [["2026-01-01", "100", "2026-01-02", "50"]]
-    assert not any("duplicate" in warning for warning in sheet.warnings)
+    assert not any("重复" in warning for warning in sheet.warnings)
 
 
 def test_xlsx_two_row_header_single_group_is_not_prefixed():
@@ -238,7 +238,7 @@ def test_xlsx_two_row_header_single_group_is_not_prefixed():
     assert sheet.columns == ["名称", "数量", "金额"]
 
 
-def test_xlsx_formula_cells_without_cached_value_warn_and_read_empty():
+def test_xlsx_formula_cells_without_cached_value_are_recalculated():
     wb = Workbook()
     ws = wb.active
     assert ws is not None
@@ -250,8 +250,43 @@ def test_xlsx_formula_cells_without_cached_value_warn_and_read_empty():
     wb.save(buffer)
 
     sheet = parse_workbook("fx.xlsx", buffer.getvalue()).sheets[0]
-    assert [row[3] for row in sheet.rows] == [None, None]
-    assert any("formula" in warning for warning in sheet.warnings)
+    assert [row[3] for row in sheet.rows] == ["20", "15"]
+    assert any("自动计算" in warning for warning in sheet.warnings)
+
+
+def test_xlsx_sumif_over_another_sheet_is_recalculated():
+    wb = Workbook()
+    orders = wb.active
+    assert orders is not None
+    orders.title = "订单"
+    orders.append(["订单号", "总金额"])
+    orders.append(["SO1", "=SUMIF(明细!$A:$A,A2,明细!$C:$C)"])
+    orders.append(["SO2", "=SUMIF(明细!$A:$A,A3,明细!$C:$C)"])
+    items = wb.create_sheet("明细")
+    items.append(["订单号", "数量", "行金额"])
+    items.append(["SO1", 2, "=B2*10"])
+    items.append(["SO1", 3, "=B3*10"])
+    items.append(["SO2", 1, "=B4*10"])
+    buffer = io.BytesIO()
+    wb.save(buffer)
+
+    sheets = {sheet.name: sheet for sheet in parse_workbook("so.xlsx", buffer.getvalue()).sheets}
+    assert [row[1] for row in sheets["订单"].rows] == ["50", "10"]
+    assert [row[2] for row in sheets["明细"].rows] == ["20", "30", "10"]
+
+
+def test_xlsx_unsupported_formula_stays_empty_and_warns():
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.append(["名称", "数量", "金额"])
+    ws.append(["甲", 2, "=VLOOKUP(B2,B:C,2,FALSE)"])
+    buffer = io.BytesIO()
+    wb.save(buffer)
+
+    sheet = parse_workbook("unsupported.xlsx", buffer.getvalue()).sheets[0]
+    assert sheet.rows[0][2] is None
+    assert any("无法计算" in warning for warning in sheet.warnings)
 
 
 def test_formula_scan_failure_is_logged_but_parse_continues(

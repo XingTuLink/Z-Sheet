@@ -156,7 +156,7 @@ def test_parser_drops_aggregate_total_rows() -> None:
     sheet = workbook.sheets[0]
     assert sheet.data_row_count == 2
     assert [row[1] for row in sheet.rows] == ["首页", "详情"]
-    assert any("aggregate" in warning for warning in sheet.warnings)
+    assert any("合计" in warning for warning in sheet.warnings)
 
 
 def test_parser_drops_total_row_in_any_column_xlsx() -> None:

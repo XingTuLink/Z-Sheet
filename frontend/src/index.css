@@ -1465,6 +1465,184 @@ a:hover {
   display: inline-flex;
 }
 
+/* ---------- multi-file import plan ---------- */
+
+.import-plan .block-footnote {
+  margin-top: -6px;
+}
+
+.plan-status {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--color-primary);
+}
+
+.plan-subhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.plan-subtitle {
+  margin: 18px 0 10px;
+  font-size: 14px;
+  font-weight: 600;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.plan-subhead .plan-subtitle {
+  margin: 0;
+}
+
+.plan-subhead + .plan-empty,
+.plan-subhead + .plan-group-list {
+  margin-top: 10px;
+}
+
+.plan-file-list,
+.plan-sheet-list,
+.plan-group-list,
+.plan-conflict-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.plan-file {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  background: #fff;
+}
+
+.plan-file-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--color-line);
+}
+
+.plan-file-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.plan-sheet {
+  padding-top: 8px;
+}
+
+.plan-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.plan-check input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--color-primary);
+}
+
+.plan-check input:disabled {
+  cursor: not-allowed;
+}
+
+.plan-sheet-name {
+  font-weight: 500;
+}
+
+.plan-empty,
+.plan-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+
+.plan-group {
+  border: 1px solid var(--color-primary-line);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  background: var(--color-primary-soft);
+}
+
+.plan-group-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--color-primary-line);
+}
+
+.plan-group-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.plan-group-head .btn-mini {
+  margin-left: auto;
+  background: #fff;
+}
+
+.plan-conflict {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--color-line);
+}
+
+.plan-conflict:last-child {
+  border-bottom: none;
+}
+
+.plan-conflict-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.plan-conflict-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.plan-conflict-entity {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.plan-conflict-message {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--color-muted);
+}
+
+.plan-conflict-select {
+  flex-shrink: 0;
+  padding: 5px 8px;
+  font-size: 13px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  color: var(--color-text);
+}
+
+.plan-conflict-select:disabled {
+  background: var(--color-head);
+  color: var(--color-muted);
+}
+
 /* ---------- Day 15 confirm action bar ---------- */
 
 .topbar-right {

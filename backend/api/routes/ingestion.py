@@ -28,7 +28,12 @@ from backend.ingestion.template import TEMPLATE_FILENAME, build_template_workboo
 from backend.logging_config import get_logger
 from backend.storage.db import SessionLocal, get_db
 from backend.storage.repositories import model_repository, understanding_repository
-from backend.understanding import confirmation
+from backend.understanding import confirmation, multi_confirmation, multi_import
+from backend.understanding.multi_import import (
+    MAX_FILES,
+    MultiImportResult,
+    MultiPreview,
+)
 from backend.understanding.profiling import STAGE_SHEETS, add_profiles
 from backend.understanding.schemas import ProfiledParsedWorkbook
 
@@ -37,6 +42,7 @@ router = APIRouter(prefix="/api/v1/ingestion", tags=["ingestion"])
 logger = get_logger("ingestion")
 
 MAX_UPLOAD_MB = MAX_UPLOAD_BYTES // (1024 * 1024)
+MAX_MULTI_UPLOAD_BYTES = MAX_UPLOAD_BYTES * 3
 
 # Thread -> generator hand-off items. The understanding pipeline is a
 # synchronous CPU-bound call, so it runs on a worker thread while this
@@ -55,6 +61,41 @@ def _too_large() -> JSONResponse:
         status_code=status.HTTP_413_CONTENT_TOO_LARGE,
         content={"detail": f"文件超过 {MAX_UPLOAD_MB} MB 上限，请拆分或精简后再上传"},
     )
+
+
+def _multi_too_large() -> JSONResponse:
+    total_mb = MAX_MULTI_UPLOAD_BYTES // (1024 * 1024)
+    return JSONResponse(
+        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+        content={"detail": f"多个文件合计超过 {total_mb} MB 上限，请分批导入"},
+    )
+
+
+async def _read_uploads(
+    files: list[UploadFile],
+) -> tuple[list[tuple[str, bytes]], JSONResponse | None]:
+    """Read every upload, enforcing per-file and total size limits."""
+    if not files:
+        return [], JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            content={"detail": "请至少选择一个文件"},
+        )
+    if len(files) > MAX_FILES:
+        return [], JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            content={"detail": f"一次最多上传 {MAX_FILES} 个文件，请分批导入"},
+        )
+    uploads: list[tuple[str, bytes]] = []
+    total = 0
+    for index, upload in enumerate(files):
+        content = await upload.read(MAX_UPLOAD_BYTES + 1)
+        if len(content) > MAX_UPLOAD_BYTES:
+            return [], _too_large()
+        total += len(content)
+        if total > MAX_MULTI_UPLOAD_BYTES:
+            return [], _multi_too_large()
+        uploads.append((upload.filename or f"upload-{index + 1}", content))
+    return uploads, None
 
 
 def _entity_count(result: ProfiledParsedWorkbook) -> int:
@@ -271,6 +312,146 @@ async def confirm_file(
         "确认生成成功（app=%s 文件=%s 版本=%d 记录=%s）",
         summary.app_key,
         file.filename,
+        summary.version,
+        summary.record_counts,
+    )
+    return ConfirmResponse(**summary.model_dump())
+
+
+def _json_object(raw: str, name: str) -> dict[str, object] | JSONResponse:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"detail": f"{name} 不是合法 JSON：{exc}"},
+        )
+    if not isinstance(payload, dict):
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"detail": f"{name} 必须是 JSON 对象"},
+        )
+    return payload
+
+
+def _cache_understanding(
+    db: Session, uploads: list[tuple[str, bytes]], result: ProfiledParsedWorkbook
+) -> None:
+    """Store the reviewed understanding; a miss only makes Confirm re-run it."""
+    try:
+        understanding_repository.save_understanding(
+            db, multi_import.session_key(uploads), result
+        )
+    except Exception:
+        logger.warning("多文件理解结果缓存写入失败，Confirm 将回退为重新推理", exc_info=True)
+
+
+@router.post("/parse-multi", response_model=MultiImportResult)
+async def parse_multiple(
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+) -> MultiImportResult | JSONResponse:
+    """Parse several uploads as one import and return the default merge plan."""
+    uploads, error = await _read_uploads(files)
+    if error is not None:
+        return error
+    try:
+        understanding = multi_import.understand(uploads)
+    except multi_import.ImportError as exc:
+        logger.info("多文件解析失败：%s", exc)
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            content={"detail": str(exc)},
+        )
+    _cache_understanding(db, uploads, understanding)
+    result = multi_import.build_result(understanding)
+    entities = (
+        result.business_model.get("entities") if result.business_model else None
+    )
+    logger.info(
+        "多文件解析成功：文件 %d、工作表 %d、实体 %d、冲突 %d",
+        len(uploads),
+        len(result.sheets),
+        len(entities) if isinstance(entities, list) else 0,
+        len(result.conflicts),
+    )
+    return result
+
+
+@router.post("/parse-multi/preview", response_model=MultiPreview)
+async def preview_multiple(
+    files: list[UploadFile] = File(...),
+    options: str = Form("{}"),
+    db: Session = Depends(get_db),
+) -> MultiPreview | JSONResponse:
+    """Recompute merging/links after the user changes sheets or merge groups."""
+    uploads, error = await _read_uploads(files)
+    if error is not None:
+        return error
+    payload = _json_object(options, "options")
+    if isinstance(payload, JSONResponse):
+        return payload
+    try:
+        parsed = multi_import.MultiPreviewOptions.model_validate(payload)
+        understanding = multi_confirmation.understand_files(db, uploads)
+        return multi_import.preview(
+            understanding,
+            sheets=parsed.sheets,
+            groups=parsed.groups,
+            choices=parsed.conflicts,
+        )
+    except ValueError as exc:
+        # ImportError and pydantic's ValidationError both inherit ValueError.
+        logger.info("多文件预览失败：%s", exc)
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"detail": str(exc)},
+        )
+
+
+@router.post("/confirm-multi", response_model=ConfirmResponse)
+async def confirm_multiple(
+    files: list[UploadFile] = File(...),
+    decisions: str = Form(...),
+    db: Session = Depends(get_db),
+) -> ConfirmResponse | JSONResponse:
+    """Apply sheet selection, merge groups and conflict choices, then persist."""
+    uploads, error = await _read_uploads(files)
+    if error is not None:
+        return error
+    payload = _json_object(decisions, "decisions")
+    if isinstance(payload, JSONResponse):
+        return payload
+
+    try:
+        summary = multi_confirmation.confirm_multi(db, uploads, payload)
+    except confirmation.ConfirmError as exc:
+        body: dict[str, object] = {"detail": str(exc)}
+        if exc.unresolved:
+            body["unresolved"] = exc.unresolved
+        logger.warning(
+            "多文件确认被拒（%d 个文件）：%s（未决 %d 项）",
+            len(uploads),
+            exc,
+            len(exc.unresolved),
+        )
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, content=body
+        )
+    except model_repository.VersionConflictError as exc:
+        logger.warning(
+            "多文件确认时版本冲突（app=%s）：%s",
+            confirmation.WORKSPACE_APP_KEY,
+            exc,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT, content={"detail": str(exc)}
+        )
+
+    logger.info(
+        "多文件确认成功（app=%s 文件=%d 版本=%d 记录=%s）",
+        summary.app_key,
+        len(uploads),
         summary.version,
         summary.record_counts,
     )

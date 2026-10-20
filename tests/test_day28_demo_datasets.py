@@ -302,7 +302,7 @@ EXPECTATIONS: list[DatasetExpectation] = [
         spec=demo.SALES_LEDGER,
         sheets={
             "客户": SheetExpectation(rows=6, header_row=3),
-            "订单": SheetExpectation(rows=5, warnings=("aggregate",)),
+            "订单": SheetExpectation(rows=5, warnings=("合计",)),
             "说明": SheetExpectation(rows=0, header_row=None, empty=True),
         },
         proposal=SALES_PROPOSAL,
@@ -328,7 +328,7 @@ EXPECTATIONS: list[DatasetExpectation] = [
         spec=demo.INVENTORY,
         sheets={
             "商品": SheetExpectation(rows=5),
-            "入库记录": SheetExpectation(rows=4, warnings=("aggregate",)),
+            "入库记录": SheetExpectation(rows=4, warnings=("合计",)),
         },
         proposal=INVENTORY_PROPOSAL,
         entities={

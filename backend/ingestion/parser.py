@@ -25,6 +25,7 @@ from openpyxl.utils.exceptions import InvalidFileException
 
 from backend.logging_config import get_logger
 
+from .formulas import evaluate_formulas
 from .header_detection import detect_header_row, used_width
 from .schemas import Cell, ParsedSheet, ParsedWorkbook
 
@@ -102,11 +103,11 @@ def _parse_xlsx(content: bytes) -> list[ParsedSheet]:
 
     # A formula cell whose result was never cached reads back as None under
     # data_only=True (silently emptying a whole column when a writer never
-    # computed it). A cheap read-only pass locates those cells so the sheet
-    # can warn the user instead of dropping the data.
-    formula_coords = _formula_cell_coords(content)
+    # computed it). A cheap read-only pass locates those cells so they can be
+    # recalculated or reported instead of dropping the data.
+    formulas = _formula_cell_texts(content)
 
-    sheets: list[ParsedSheet] = []
+    prepared: list[tuple[str, list[list[Cell]], dict[int, list[tuple[int, int, str]]]]] = []
     try:
         for worksheet in workbook.worksheets:
             # Vertical merges only (single column spanning rows): forward-fill
@@ -175,24 +176,32 @@ def _parse_xlsx(content: bytes) -> list[ParsedSheet]:
                     if cells[col_idx] is None:
                         cells[col_idx] = anchor
 
-            formula_missing = _count_missing_formulas(
-                rows, formula_coords.get(worksheet.title, set())
-            )
-            sheets.append(
-                _build_sheet(
-                    worksheet.title,
-                    rows,
-                    horizontal_spans=horizontal_spans,
-                    formula_missing=formula_missing,
-                )
-            )
+            prepared.append((worksheet.title, rows, horizontal_spans))
     finally:
         workbook.close()
+
+    # Recalculation needs every sheet's grid, because formulas reference
+    # sibling sheets (SUMIF over 订单明细 from 订单).
+    formula_counts = evaluate_formulas(
+        {title: rows for title, rows, _ in prepared}, formulas
+    )
+    sheets: list[ParsedSheet] = []
+    for title, rows, horizontal_spans in prepared:
+        resolved, missing = formula_counts.get(title, (0, 0))
+        sheets.append(
+            _build_sheet(
+                title,
+                rows,
+                horizontal_spans=horizontal_spans,
+                formula_resolved=resolved,
+                formula_missing=missing,
+            )
+        )
     return sheets
 
 
-def _formula_cell_coords(content: bytes) -> dict[str, set[tuple[int, int]]]:
-    """0-based (row, col) of formula cells per sheet — best-effort.
+def _formula_cell_texts(content: bytes) -> dict[str, dict[tuple[int, int], str]]:
+    """0-based (row, col) -> formula text, per sheet — best-effort.
 
     A formula whose result was never cached reads back as None under
     ``data_only=True``, silently emptying the cell. The scan is advisory:
@@ -206,34 +215,20 @@ def _formula_cell_coords(content: bytes) -> dict[str, set[tuple[int, int]]]:
         logger.warning("公式单元格扫描：工作簿无法只读打开，本次跳过公式列告警", exc_info=True)
         return {}
     try:
-        coords: dict[str, set[tuple[int, int]]] = {}
+        texts: dict[str, dict[tuple[int, int], str]] = {}
         for worksheet in book.worksheets:
-            found: set[tuple[int, int]] = set()
+            found: dict[tuple[int, int], str] = {}
             for row_index, row in enumerate(worksheet.iter_rows()):
                 for col_index, cell in enumerate(row):
-                    if cell.data_type == "f":
-                        found.add((row_index, col_index))
-            coords[worksheet.title] = found
-        return coords
+                    if cell.data_type == "f" and isinstance(cell.value, str):
+                        found[(row_index, col_index)] = cell.value
+            texts[worksheet.title] = found
+        return texts
     except Exception:
         logger.warning("公式单元格扫描：遍历工作表失败，本次跳过公式列告警", exc_info=True)
         return {}
     finally:
         book.close()
-
-
-def _count_missing_formulas(
-    rows: list[list[Cell]], coords: set[tuple[int, int]]
-) -> int:
-    """Formula cells that ended up empty in the value grid."""
-    missing = 0
-    for row_index, col_index in coords:
-        if row_index >= len(rows):
-            continue
-        row = rows[row_index]
-        if col_index < len(row) and row[col_index] is None:
-            missing += 1
-    return missing
 
 
 def _normalize_header(value: str) -> str:
@@ -415,6 +410,7 @@ def _build_sheet(
     rows: list[list[Cell]],
     *,
     horizontal_spans: dict[int, list[tuple[int, int, str]]] | None = None,
+    formula_resolved: int = 0,
     formula_missing: int = 0,
 ) -> ParsedSheet:
     detection = detect_header_row(rows)
@@ -426,16 +422,23 @@ def _build_sheet(
         raise ParseError(f"sheet {name!r} has {width} columns; limit is {MAX_COLUMNS}")
 
     warnings: list[str] = []
-    if formula_missing:
-        warnings.append(
-            f"{formula_missing} formula cell(s) had no cached result and were read as "
-            "empty; open the file in Excel and re-save it (or paste the computed "
-            "values) before uploading again"
-        )
+    if formula_missing or formula_resolved:
+        if formula_missing:
+            calculated = (
+                f"{formula_resolved} 个已按公式自动计算；" if formula_resolved else ""
+            )
+            warnings.append(
+                f"有 {formula_missing} 个公式单元格无法计算（{calculated}"
+                "源文件没有缓存计算结果），已按空值读取；"
+                "请用 Excel 打开后重新保存（或粘贴计算后的数值）再上传"
+            )
+        else:
+            warnings.append(
+                f"有 {formula_resolved} 个公式单元格没有缓存计算结果，已按公式自动计算"
+            )
     if detection.confidence == "low":
         warnings.append(
-            f"header row {detection.row_index + 1} was detected with low confidence; "
-            "please verify it"
+            f"第 {detection.row_index + 1} 行被识别为表头，但把握不大，请核对"
         )
 
     raw_header = rows[detection.row_index]
@@ -450,7 +453,7 @@ def _build_sheet(
             unnamed += 1
             columns.append(f"column_{pos + 1}")
     if unnamed:
-        warnings.append(f"{unnamed} unnamed header column(s) generated as column_<n>")
+        warnings.append(f"有 {unnamed} 个表头没有名称，已按 column_<n> 生成")
 
     # A two-row grouped header (e.g. 收款信息 / 退款信息 each containing a
     # 金额 column) is disambiguated by prefixing child names with the group
@@ -462,7 +465,7 @@ def _build_sheet(
 
     duplicates = sorted({col for col in columns if columns.count(col) > 1})
     if duplicates:
-        warnings.append(f"duplicate header values: {', '.join(duplicates)}")
+        warnings.append(f"表头存在重复：{', '.join(duplicates)}")
 
     # First pass: structural cleanup only (blank/summary rows), aligned to
     # the detected width. The sequence-column probe needs these candidates to
@@ -509,24 +512,23 @@ def _build_sheet(
 
     if summary_rows_dropped:
         warnings.append(
-            f"ignored {summary_rows_dropped} aggregate/total row(s) "
-            "(合计/总计/小计 …)"
+            f"已忽略 {summary_rows_dropped} 行合计/总计/小计类汇总行"
         )
     if annotation_rows_dropped:
-        sample = f", e.g. {annotation_samples!r}" if annotation_samples else ""
+        sample = f"，例如 {annotation_samples!r}" if annotation_samples else ""
         if sequence_col is not None:
             warnings.append(
-                f"ignored {annotation_rows_dropped} non-record row(s) "
-                f"outside the {columns[0]} sequence (notes/footer content"
-                f"{sample}); remove them from the sheet if they are real data"
+                f"已忽略 {annotation_rows_dropped} 行不属于「{columns[0]}」序号序列的"
+                f"非记录行（表尾注释或联系块{sample}）；如果这些是真实数据，"
+                "请从工作表中移除"
             )
         else:
             warnings.append(
-                f"ignored {annotation_rows_dropped} note/banner row(s){sample}"
+                f"已忽略 {annotation_rows_dropped} 行注释或横幅内容{sample}"
             )
 
     if not data_rows:
-        warnings.append("sheet has a header row but no data rows")
+        warnings.append("工作表有表头但没有数据行")
 
     return ParsedSheet(
         name=name,
