@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from backend.api.main import app
 from backend.domain.serialization import model_from_yaml
 from backend.runtime import seed
+from tests.runtime_helpers import rows
 
 client = TestClient(app)
 
@@ -24,10 +25,12 @@ def test_bootstrap_auto_seeds_demo_on_first_call():
     view_kinds = {v["kind"] for v in body["model"]["views"]}
     assert {"list", "detail", "form"} <= view_kinds
 
-    records = body["records"]
-    assert len(records["customer"]) == 5
-    assert len(records["order"]) == 8
-    first_customer = records["customer"][0]
+    # Rows are no longer bundled into bootstrap; they come from the list API.
+    assert "records" not in body
+    customers = rows(client, seed.DEMO_APP_KEY, "customer")
+    assert len(customers) == 5
+    assert len(rows(client, seed.DEMO_APP_KEY, "order")) == 8
+    first_customer = customers[0]
     assert first_customer["customer_name"]
     assert first_customer["region"] in {"华东", "华南", "华北", "西南"}
 
@@ -55,8 +58,7 @@ def test_bootstrap_malformed_app_key_returns_422():
 
 
 def test_seed_rows_have_declared_types():
-    body = client.get(f"/api/v1/runtime/{seed.DEMO_APP_KEY}/bootstrap").json()
-    for row in body["records"]["order"]:
+    for row in rows(client, seed.DEMO_APP_KEY, "order"):
         assert isinstance(row["order_no"], str)
         assert isinstance(row["amount"], (int, float))
         assert isinstance(row["order_date"], str)

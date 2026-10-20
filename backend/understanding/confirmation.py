@@ -30,8 +30,8 @@ from backend.domain.models import BusinessField, BusinessModel, FieldType
 from backend.ingestion.parser import ParseError, parse_workbook
 from backend.ingestion.schemas import Cell
 from backend.runtime.seed import validate_records
+from backend.storage.record_store import get_record_store
 from backend.storage.repositories import (
-    app_data_repository,
     model_repository,
     understanding_repository,
 )
@@ -419,8 +419,14 @@ def confirm_workbook(
             source_request=filename,
             commit=False,
         )
-        app_data_repository.upsert_records(
-            db, WORKSPACE_APP_KEY, records, commit=False
+        entities = {entity.key: entity for entity in model.entities}
+        rows = [
+            (entity_key, str(row[entities[entity_key].key_field]), row)
+            for entity_key, entity_rows in records.items()
+            for row in entity_rows
+        ]
+        get_record_store(db).replace_app(
+            WORKSPACE_APP_KEY, rows, record.version, commit=False
         )
         db.commit()
     except Exception:

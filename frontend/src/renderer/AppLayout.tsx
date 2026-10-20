@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 
-import { fetchBootstrap } from '../api/runtime'
+import { appApiBase, fetchBootstrap } from '../api/runtime'
 import { BrandLockup, CompanyByline, CompanyFooter, LOGO_SRC } from '../components/Brand'
 import { resolveAppRoute } from './appRoute'
 import { PatchDialog } from './PatchDialog'
@@ -86,6 +86,7 @@ export function AppLayout() {
     <RuntimeProvider
       key={`${data.app_key}:${data.version}`}
       bootstrap={data}
+      apiBase={appApiBase(data.app_key)}
     >
       <div className="app-shell">
         <header className="topbar">

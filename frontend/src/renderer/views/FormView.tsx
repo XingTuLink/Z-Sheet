@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
-import { RecordApiError } from '../../api/runtime'
+import { RecordApiError, fetchRow } from '../../api/runtime'
 import { resolveAppRoute } from '../appRoute'
 import { findViewForEntity, getEntity, getField } from '../resolve'
 import type {
@@ -64,7 +65,7 @@ function FormControl({
 }
 
 export function FormView({ view }: { view: FormViewModel }) {
-  const { bootstrap, records, readOnly, saveRecord } = useRuntime()
+  const { bootstrap, apiBase, readOnly, saveRecord } = useRuntime()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const { basePath } = resolveAppRoute(useLocation().pathname)
@@ -73,12 +74,11 @@ export function FormView({ view }: { view: FormViewModel }) {
   const mode = id ? 'update' : 'create'
 
   const entity = getEntity(model, view.entity)
-  const existingRow =
-    entity && id
-      ? (records[entity.key] ?? []).find(
-          (item) => String(item[entity.key_field] ?? '') === id,
-        )
-      : undefined
+  const { data: existingRow, isPending } = useQuery({
+    queryKey: ['row', apiBase, view.entity, id],
+    queryFn: () => fetchRow(apiBase, view.entity, id),
+    enabled: Boolean(entity && id),
+  })
   const fields = useMemo(
     () =>
       entity
@@ -89,16 +89,23 @@ export function FormView({ view }: { view: FormViewModel }) {
     [entity, view.fields],
   )
 
-  const [values, setValues] = useState<Record<string, string>>(() => {
-    const next: Record<string, string> = {}
-    if (entity && existingRow) {
-      for (const field of fields) next[field.key] = stringifyValue(existingRow[field.key])
-    }
-    return next
-  })
+  const [values, setValues] = useState<Record<string, string>>({})
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [submitError, setSubmitError] = useState('')
   const [saving, setSaving] = useState(false)
+  const initialized = useRef(false)
+
+  // Fill the form once the row arrives; later refetches must not overwrite
+  // edits the user already typed.
+  useEffect(() => {
+    if (initialized.current || !existingRow) return
+    initialized.current = true
+    const next: Record<string, string> = {}
+    for (const field of fields) {
+      next[field.key] = stringifyValue(existingRow[field.key])
+    }
+    setValues(next)
+  }, [existingRow, fields])
 
   if (!entity) {
     return (
@@ -117,6 +124,16 @@ export function FormView({ view }: { view: FormViewModel }) {
         <div className="card">
           <h1>只读页面</h1>
           <p className="muted">这是公开发布的系统，仅支持浏览，不能新增或编辑记录。</p>
+        </div>
+      </section>
+    )
+  }
+
+  if (mode === 'update' && isPending) {
+    return (
+      <section className="view">
+        <div className="card">
+          <p className="muted">正在加载记录…</p>
         </div>
       </section>
     )
@@ -184,17 +201,6 @@ export function FormView({ view }: { view: FormViewModel }) {
       } else {
         row[field.key] = raw
       }
-    }
-
-    const keyRaw = (values[entity!.key_field] ?? '').trim()
-    if (
-      mode === 'create' &&
-      keyRaw !== '' &&
-      (records[entity!.key] ?? []).some(
-        (item) => String(item[entity!.key_field] ?? '') === keyRaw,
-      )
-    ) {
-      nextErrors[entity!.key_field] = `${entity!.name}标识已存在`
     }
 
     if (Object.keys(nextErrors).length > 0) {

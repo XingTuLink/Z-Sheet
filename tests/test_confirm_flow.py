@@ -19,7 +19,8 @@ from fastapi.testclient import TestClient
 
 from backend.api.main import app
 from backend.storage.db import SessionLocal
-from backend.storage.repositories import app_data_repository, model_repository
+from backend.storage.record_store import SqlRecordStore, get_record_store
+from backend.storage.repositories import model_repository
 from backend.understanding import confirmation
 from backend.understanding.confirmation import (
     ConfirmDecisions,
@@ -29,6 +30,7 @@ from backend.understanding.confirmation import (
     missing_link_decisions,
 )
 from backend.understanding.schemas import InferredLink
+from tests.runtime_helpers import rows
 
 client = TestClient(app)
 
@@ -169,9 +171,9 @@ def test_confirm_persists_model_and_workbook_rows():
         "order",
     }
     # The generated app renders the user's rows, not the demo seed.
-    assert len(payload["records"]["customer"]) == 6
-    assert len(payload["records"]["product"]) == 3
-    orders = payload["records"]["order"]
+    assert len(rows(client, "workspace", "customer")) == 6
+    assert len(rows(client, "workspace", "product")) == 3
+    orders = rows(client, "workspace", "order")
     assert len(orders) == 8
     assert orders[0]["order_no"] == "SO-1"
     assert isinstance(orders[0]["amount"], (int, float))
@@ -221,7 +223,7 @@ def test_confirm_reject_link_rebuilds_views_without_it():
     dumped = json.dumps(payload["model"], ensure_ascii=False)
     assert "product_to_order" not in dumped
     # Order rows are still persisted; only the navigation relationship is gone.
-    assert len(payload["records"]["order"]) == 8
+    assert len(rows(client, "workspace", "order")) == 8
 
 
 def test_confirm_twice_appends_a_new_version():
@@ -236,7 +238,7 @@ def test_confirm_twice_appends_a_new_version():
     assert [link["key"] for link in payload["model"]["links"]] == [
         "customer_to_order"
     ]
-    assert len(payload["records"]["order"]) == 8
+    assert len(rows(client, "workspace", "order")) == 8
 
 
 def test_demo_bootstrap_stays_independent():
@@ -247,9 +249,8 @@ def test_demo_bootstrap_stays_independent():
     assert demo.status_code == 200
     payload = demo.json()
     assert payload["app_key"] == "default"
-    # Demo seed rows still come from the checked-in fixtures.
-    assert payload["records"]
-    assert "customer" in payload["records"]
+    # Demo rows still come from the checked-in fixtures.
+    assert rows(client, "default", "customer")
     assert payload["model"]["app"]["name"] != "台账"
 
 
@@ -340,9 +341,10 @@ def test_confirm_accepts_year_only_date_cell():
     )
     assert resp.status_code == 200, resp.text
 
-    boot = client.get("/api/v1/runtime/workspace/bootstrap").json()
-    rows = boot["records"][entity["key"]]
-    year_only = next(row for row in rows if row[entity["key_field"]] == "S-6")
+    workspace_rows = rows(client, "workspace", entity["key"])
+    year_only = next(
+        row for row in workspace_rows if row[entity["key_field"]] == "S-6"
+    )
     assert year_only[date_field["key"]] == "2022-01-01"
 
 
@@ -409,7 +411,7 @@ def test_confirm_rolls_back_model_when_row_write_fails(monkeypatch):
     def boom(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("模拟业务数据写入失败")
 
-    monkeypatch.setattr(app_data_repository, "upsert_records", boom)
+    monkeypatch.setattr(SqlRecordStore, "replace_app", boom)
 
     db = SessionLocal()
     try:
@@ -426,7 +428,7 @@ def test_confirm_rolls_back_model_when_row_write_fails(monkeypatch):
             )
             is None
         )
-        assert app_data_repository.get_records(db, confirmation.WORKSPACE_APP_KEY) is None
+        assert get_record_store(db).load(confirmation.WORKSPACE_APP_KEY) == {}
     finally:
         db.close()
 

@@ -14,16 +14,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
+from backend.api import runtime_views
+from backend.api.runtime_views import ListParams, list_params
 from backend.api.schemas import (
     PublicationRequest,
     PublicationResponse,
     PublicationUpdateRequest,
     RuntimeBootstrapResponse,
 )
+from backend.domain.models import BusinessModel
 from backend.logging_config import get_logger
 from backend.runtime import record_io
 from backend.storage.db import get_db
@@ -134,6 +137,22 @@ def unpublish_publication(app_key: str, db: Session = Depends(get_db)) -> Any:
     return _serialize(db, record)
 
 
+def public_context(db: Session, slug: str) -> tuple[str, BusinessModel]:
+    """Resolve a published slug to its live records and pinned model."""
+    record = pubs.get_published_by_slug(db, slug)
+    if record is None:
+        # Same 404 for never-existed and unpublished: no enumeration hint.
+        raise record_io.RecordNotFound("发布链接不存在或已下线")
+    try:
+        _, model = record_io.load_pinned_model(
+            db, record.app_key, record.model_version
+        )
+    except model_repository.AppNotFoundError as exc:
+        logger.warning("发布引用的版本缺失：app=%s v=%s", record.app_key, exc)
+        raise record_io.RecordNotFound("发布内容暂不可用") from exc
+    return record.app_key, model
+
+
 @public_router.get(
     "/{slug}/bootstrap",
     response_model=RuntimeBootstrapResponse,
@@ -145,15 +164,59 @@ def public_bootstrap(slug: str, db: Session = Depends(get_db)) -> Any:
         # Same 404 for never-existed and unpublished: no enumeration hint.
         return _error(status.HTTP_404_NOT_FOUND, "发布链接不存在或已下线")
     try:
-        data = record_io.load_pinned_runtime_data(
+        version, _ = record_io.load_pinned_model(
             db, record.app_key, record.model_version
         )
-    except (model_repository.AppNotFoundError, record_io.RecordNotFound) as exc:
+    except model_repository.AppNotFoundError as exc:
         logger.warning("发布引用的版本缺失：app=%s v=%s", record.app_key, exc)
         return _error(status.HTTP_404_NOT_FOUND, "发布内容暂不可用")
     return {
         "app_key": record.app_key,
-        "version": data.record.version,
-        "model": data.record.snapshot,
-        "records": data.records,
+        "version": version.version,
+        "model": version.snapshot,
     }
+
+
+@public_router.get("/{slug}/entities/{entity_key}/rows")
+def public_rows(
+    slug: str,
+    entity_key: str,
+    params: ListParams = Depends(list_params),
+    db: Session = Depends(get_db),
+) -> Any:
+    return runtime_views.list_rows(db, public_context, slug, entity_key, params)
+
+
+@public_router.get("/{slug}/entities/{entity_key}/rows/{row_key}")
+def public_row(
+    slug: str, entity_key: str, row_key: str, db: Session = Depends(get_db)
+) -> Any:
+    return runtime_views.get_row(db, public_context, slug, entity_key, row_key)
+
+
+@public_router.get("/{slug}/entities/{entity_key}/related")
+def public_related_rows(
+    slug: str,
+    entity_key: str,
+    parent_entity: str = Query(...),
+    link: str = Query(...),
+    parent: str = Query(...),
+    limit: int = Query(5, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+) -> Any:
+    return runtime_views.related(
+        db,
+        public_context,
+        slug,
+        parent_entity=parent_entity,
+        link=link,
+        parent=parent,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@public_router.get("/{slug}/dashboard")
+def public_dashboard(slug: str, db: Session = Depends(get_db)) -> Any:
+    return runtime_views.dashboard(db, public_context, slug)

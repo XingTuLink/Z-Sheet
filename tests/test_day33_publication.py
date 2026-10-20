@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from backend.api.main import app
 from backend.storage.repositories import publication_repository as pubs
+from tests.runtime_helpers import public_rows
 
 client = TestClient(app)
 SALES_YAML = (
@@ -174,9 +175,7 @@ def test_public_bootstrap_serves_pinned_model_but_live_records() -> None:
         f["key"] for f in payload["model"]["entities"][0]["fields"]
     }
     assert "email" not in customer_fields
-    names = [
-        row["customer_name"] for row in payload["records"]["customer"]
-    ]
+    names = [row["customer_name"] for row in public_rows(client, "kehu-xiaoshou", "customer")]
     assert "公开测试客户" in names
 
     # Owner evolves the model to v2.
@@ -219,10 +218,17 @@ def test_public_surface_has_no_write_endpoint() -> None:
         json={"row": {"customer_name": "hacker"}},
     )
     assert write.status_code in (404, 405)
+    # Read endpoints are available, writes are not.
+    listed = client.get("/api/v1/p/kehu-xiaoshou/entities/customer/rows")
+    assert listed.status_code == 200
+    assert listed.json()["entity_total"] == 0
+    dashboard = client.get("/api/v1/p/kehu-xiaoshou/dashboard")
+    assert dashboard.status_code == 200
+    assert dashboard.json()["metrics"]
     # The attempted write never landed.
-    public = client.get("/api/v1/p/kehu-xiaoshou/bootstrap").json()
     assert all(
-        row["customer_name"] != "hacker" for row in public["records"]["customer"]
+        row["customer_name"] != "hacker"
+        for row in public_rows(client, "kehu-xiaoshou", "customer")
     )
 
 

@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query'
 import { NavLink, Outlet, useParams } from 'react-router-dom'
 
 import { fetchPublicBootstrap } from '../api/publication'
+import { publicApiBase } from '../api/runtime'
 import { BrandLockup, CompanyByline, CompanyFooter } from '../components/Brand'
 import { RuntimeProvider } from './RuntimeProvider'
 
@@ -52,6 +53,7 @@ export function PublicAppLayout() {
     <RuntimeProvider
       key={`pub:${slug}:${data.version}`}
       bootstrap={data}
+      apiBase={publicApiBase(slug)}
       readOnly
     >
       <div className="app-shell">

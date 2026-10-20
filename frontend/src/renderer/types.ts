@@ -2,8 +2,9 @@
  * Frontend mirror of the frozen Business Model contract (schema 0.1).
  *
  * The renderer consumes only model + data; these types describe exactly what
- * the backend bootstrap endpoint returns. Snapshots are dumped without field
- * aliases, so Link fields appear as `from_` and `on.from_`.
+ * the backend bootstrap endpoint returns. Business rows are not part of the
+ * bootstrap payload and are queried per view. Snapshots are dumped without
+ * field aliases, so Link fields appear as `from_` and `on.from_`.
  */
 
 export type FieldType = 'string' | 'number' | 'money' | 'date' | 'enum' | 'phone'
@@ -147,5 +148,4 @@ export interface Bootstrap {
   app_key: string
   version: number
   model: BusinessModel
-  records: Record<string, RecordRow[]>
 }

@@ -1,7 +1,10 @@
 import type {
   BusinessField,
   BusinessModel,
+  DetailView,
   Entity,
+  FormView,
+  ListView,
   View,
   ViewKind,
 } from './types'
@@ -12,6 +15,26 @@ export function findViewByKey(model: BusinessModel, key: string): View | undefin
   return model.views.find((view) => view.key === key)
 }
 
+export function findViewForEntity(
+  model: BusinessModel,
+  entityKey: string,
+  kind: 'list',
+): ListView | undefined
+export function findViewForEntity(
+  model: BusinessModel,
+  entityKey: string,
+  kind: 'detail',
+): DetailView | undefined
+export function findViewForEntity(
+  model: BusinessModel,
+  entityKey: string,
+  kind: 'form',
+): FormView | undefined
+export function findViewForEntity(
+  model: BusinessModel,
+  entityKey: string,
+  kind: ViewKind,
+): View | undefined
 export function findViewForEntity(
   model: BusinessModel,
   entityKey: string,

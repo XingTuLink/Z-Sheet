@@ -1,5 +1,7 @@
+import { useQuery } from '@tanstack/react-query'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
+import { fetchRow } from '../../api/runtime'
 import { resolveAppRoute } from '../appRoute'
 import { formatCell } from '../format'
 import { findViewForEntity, getEntity } from '../resolve'
@@ -8,7 +10,7 @@ import type { DetailView as DetailViewModel } from '../types'
 import { RelatedList } from './RelatedList'
 
 export function DetailView({ view }: { view: DetailViewModel }) {
-  const { bootstrap, records, readOnly, deleteRecord } = useRuntime()
+  const { bootstrap, apiBase, readOnly, deleteRecord } = useRuntime()
   const navigate = useNavigate()
   const model = bootstrap.model
   const [searchParams] = useSearchParams()
@@ -16,6 +18,12 @@ export function DetailView({ view }: { view: DetailViewModel }) {
   const id = searchParams.get('id') ?? ''
 
   const entity = getEntity(model, view.entity)
+  const { data: row, isPending } = useQuery({
+    queryKey: ['row', apiBase, view.entity, id],
+    queryFn: () => fetchRow(apiBase, view.entity, id),
+    enabled: Boolean(entity && id),
+  })
+
   if (!entity) {
     return (
       <section className="view">
@@ -27,10 +35,6 @@ export function DetailView({ view }: { view: DetailViewModel }) {
     )
   }
 
-  const rows = records[view.entity] ?? []
-  const row = rows.find(
-    (item) => String(item[entity.key_field] ?? '') === id,
-  )
   const listView = findViewForEntity(model, view.entity, 'list')
   const formView = findViewForEntity(model, view.entity, 'form')
   const listTarget = listView ? `${basePath}/views/${listView.key}` : basePath
@@ -74,7 +78,11 @@ export function DetailView({ view }: { view: DetailViewModel }) {
         )}
       </header>
 
-      {!row ? (
+      {isPending && !row ? (
+        <div className="card">
+          <p className="muted">正在加载记录…</p>
+        </div>
+      ) : !row ? (
         <div className="card">
           <p className="muted">
             记录不存在。
@@ -113,7 +121,7 @@ export function DetailView({ view }: { view: DetailViewModel }) {
               key={`related-${index}`}
               block={block}
               parentEntity={entity}
-              parentRow={row}
+              parentRowKey={String(row[entity.key_field] ?? '')}
             />
           ),
         )

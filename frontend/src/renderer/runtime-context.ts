@@ -4,7 +4,8 @@ import type { Bootstrap, RecordRow } from './types'
 
 export interface RuntimeContextValue {
   bootstrap: Bootstrap
-  records: Record<string, RecordRow[]>
+  /** Read API base: the owned runtime or the published /p mirror. */
+  apiBase: string
   /** Public /p/:slug pages are strictly read-only; hide all mutation UI. */
   readOnly: boolean
   saveRecord: (

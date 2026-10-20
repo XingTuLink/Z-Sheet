@@ -4,11 +4,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from backend.api.schemas import RecordMutationResponse, RecordPayload, RuntimeBootstrapResponse
+from backend.api import runtime_views
+from backend.api.runtime_views import ListParams, list_params
+from backend.api.schemas import (
+    RecordMutationResponse,
+    RecordPayload,
+    RuntimeBootstrapResponse,
+)
 from backend.runtime import record_io
 from backend.storage.db import get_db
 
@@ -25,7 +31,7 @@ def _error(status_code: int, detail: str) -> JSONResponse:
 )
 def bootstrap(app_key: str, db: Session = Depends(get_db)) -> Any:
     try:
-        data = record_io.load_runtime_data(db, app_key)
+        record, _ = record_io.load_current_model(db, app_key)
     except record_io.RecordNotFound as exc:
         return _error(status.HTTP_404_NOT_FOUND, str(exc))
     except ValueError as exc:
@@ -33,10 +39,58 @@ def bootstrap(app_key: str, db: Session = Depends(get_db)) -> Any:
 
     return {
         "app_key": app_key,
-        "version": data.record.version,
-        "model": data.record.snapshot,
-        "records": data.records,
+        "version": record.version,
+        "model": record.snapshot,
     }
+
+
+@router.get("/{app_key}/entities/{entity_key}/rows")
+def list_rows(
+    app_key: str,
+    entity_key: str,
+    params: ListParams = Depends(list_params),
+    db: Session = Depends(get_db),
+) -> Any:
+    return runtime_views.list_rows(
+        db, runtime_views.owner_context, app_key, entity_key, params
+    )
+
+
+@router.get("/{app_key}/entities/{entity_key}/rows/{row_key}")
+def get_row(
+    app_key: str, entity_key: str, row_key: str, db: Session = Depends(get_db)
+) -> Any:
+    return runtime_views.get_row(
+        db, runtime_views.owner_context, app_key, entity_key, row_key
+    )
+
+
+@router.get("/{app_key}/entities/{entity_key}/related")
+def related_rows(
+    app_key: str,
+    entity_key: str,
+    parent_entity: str = Query(...),
+    link: str = Query(...),
+    parent: str = Query(...),
+    limit: int = Query(5, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+) -> Any:
+    return runtime_views.related(
+        db,
+        runtime_views.owner_context,
+        app_key,
+        parent_entity=parent_entity,
+        link=link,
+        parent=parent,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/{app_key}/dashboard")
+def dashboard(app_key: str, db: Session = Depends(get_db)) -> Any:
+    return runtime_views.dashboard(db, runtime_views.owner_context, app_key)
 
 
 @router.post(

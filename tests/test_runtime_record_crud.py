@@ -5,14 +5,13 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from backend.api.main import app
+from tests.runtime_helpers import rows
 
 client = TestClient(app)
 
 
 def bootstrap_rows(entity: str) -> list[dict]:
-    response = client.get("/api/v1/runtime/default/bootstrap")
-    assert response.status_code == 200
-    return response.json()["records"][entity]
+    return rows(client, "default", entity)
 
 
 def customer(name: str, **overrides: object) -> dict[str, object]:

@@ -27,10 +27,8 @@ from backend.domain.enums import FieldRole, FieldType
 from backend.domain.models import BusinessField
 from backend.ingestion.parser import parse_workbook
 from backend.storage.db import SessionLocal
-from backend.storage.repositories import (
-    app_data_repository,
-    understanding_repository,
-)
+from backend.storage.record_store import get_record_store
+from backend.storage.repositories import understanding_repository
 from backend.understanding.confirmation import (
     ConfirmDecisions,
     confirm_workbook,
@@ -464,7 +462,7 @@ def test_sra_workbook_confirms_with_markers_as_null() -> None:
         )
         db.commit()
         summary = confirm_workbook(db, file_name, content, decisions)
-        records = app_data_repository.get_records(db, summary.app_key)
+        records = get_record_store(db).load(summary.app_key)
     finally:
         db.close()
 

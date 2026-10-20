@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 
+import { fetchRelated } from '../../api/runtime'
 import { resolveAppRoute } from '../appRoute'
 import { formatCell } from '../format'
-import { selectRelatedRows } from '../relationQuery'
 import { findViewForEntity, getEntity, getField } from '../resolve'
 import { useRuntime } from '../useRuntime'
 import type {
@@ -11,7 +12,6 @@ import type {
   DetailBlock,
   Entity,
   Link as ModelLink,
-  RecordRow,
 } from '../types'
 
 const INITIAL_LIMIT = 5
@@ -26,56 +26,53 @@ function childColumns(child: Entity, preferredKeys: string[]): BusinessField[] {
 export function RelatedList({
   block,
   parentEntity,
-  parentRow,
+  parentRowKey,
 }: {
   block: DetailBlock
   parentEntity: Entity
-  parentRow: RecordRow
+  parentRowKey: string
 }) {
-  const { bootstrap, records } = useRuntime()
+  const { bootstrap, apiBase } = useRuntime()
   const location = useLocation()
   const { basePath } = resolveAppRoute(location.pathname)
   const [limit, setLimit] = useState(INITIAL_LIMIT)
 
   const model = bootstrap.model
-  const link: ModelLink | undefined = model.links.find((item) => item.key === block.link)
+  const link: ModelLink | undefined = model.links.find(
+    (item) => item.key === block.link,
+  )
+  const childKey = link
+    ? link.from_ === parentEntity.key
+      ? link.to
+      : link.from_
+    : undefined
+  const child = childKey ? getEntity(model, childKey) : undefined
+  const childList = child ? findViewForEntity(model, child.key, 'list') : undefined
+  const childDetail = child
+    ? findViewForEntity(model, child.key, 'detail')
+    : undefined
 
-  const view = useMemo(() => {
-    if (!link) return null
-    const childKey =
-      link.from_ === parentEntity.key
-        ? link.to
-        : link.from_
-    const child = getEntity(model, childKey)
-    const childList = child
-      ? (findViewForEntity(model, child.key, 'list') as
-          | Extract<(typeof model.views)[number], { kind: 'list' }>
-          | undefined)
-      : undefined
-    const childDetail = child
-      ? findViewForEntity(model, child.key, 'detail')
-      : undefined
-    if (!child) return null
-    const allRows = records[child.key] ?? []
-    const total = selectRelatedRows({
-      rows: allRows,
-      currentEntity: parentEntity,
-      parentRow,
-      link,
-      childEntity: child,
-      sorts: childList?.sorts ?? [],
-    })
-    const visible = total.slice(0, limit)
-    return {
-      child,
-      columns: childColumns(child, childList?.columns ?? [child.key_field]),
-      detailKey: childDetail?.key,
-      total,
-      visible,
-    }
-  }, [link, limit, model, parentEntity, parentRow, records])
+  const { data, isPending } = useQuery({
+    queryKey: [
+      'related',
+      apiBase,
+      child?.key,
+      link?.key,
+      parentEntity.key,
+      parentRowKey,
+      limit,
+    ],
+    queryFn: () =>
+      fetchRelated(apiBase, child!.key, {
+        parentEntity: parentEntity.key,
+        link: link!.key,
+        parent: parentRowKey,
+        limit,
+      }),
+    enabled: Boolean(child && link && parentRowKey),
+  })
 
-  if (!link || !view) {
+  if (!link || !child) {
     return (
       <div className="card placeholder-card">
         <h2>{block.title ?? '关联数据'}</h2>
@@ -84,17 +81,23 @@ export function RelatedList({
     )
   }
 
-  const { child, columns, detailKey, total, visible } = view
+  const columns = childColumns(child, childList?.columns ?? [child.key_field])
   const title = block.title ?? `关联${child.name}`
+  const rows = data?.rows ?? []
+  const total = data?.total ?? 0
 
   return (
     <div className="card related-card">
       <div className="related-head">
         <h2>{title}</h2>
-        <span className="related-count">{total.length} 条</span>
+        <span className="related-count">
+          {isPending && !data ? '加载中…' : `${total} 条`}
+        </span>
       </div>
-      {total.length === 0 ? (
-        <p className="muted related-empty">暂无关联的{child.name}</p>
+      {total === 0 ? (
+        <p className="muted related-empty">
+          {isPending && !data ? '正在加载关联记录…' : `暂无关联的${child.name}`}
+        </p>
       ) : (
         <>
           <table className="grid related-grid">
@@ -106,18 +109,18 @@ export function RelatedList({
               </tr>
             </thead>
             <tbody>
-              {visible.map((row) => {
+              {rows.map((row, index) => {
                 const rowKey = String(row[child.key_field] ?? '')
                 return (
-                  <tr key={rowKey}>
+                  <tr key={`${rowKey}-${index}`}>
                     {columns.map((field) => {
                       const value = row[field.key]
                       return (
                         <td key={field.key}>
-                          {field.key === child.key_field && detailKey ? (
+                          {field.key === child.key_field && childDetail ? (
                             <Link
                               className="row-link"
-                              to={`${basePath}/views/${detailKey}?id=${encodeURIComponent(rowKey)}`}
+                              to={`${basePath}/views/${childDetail.key}?id=${encodeURIComponent(rowKey)}`}
                             >
                               {formatCell(field, value)}
                             </Link>
@@ -134,14 +137,14 @@ export function RelatedList({
               })}
             </tbody>
           </table>
-          {total.length > visible.length && (
+          {total > rows.length && (
             <div className="related-more">
               <button
                 type="button"
                 className="btn btn-secondary"
                 onClick={() => setLimit((value) => value + LIMIT_STEP)}
               >
-                显示更多（剩余 {total.length - visible.length} 条）
+                显示更多（剩余 {total - rows.length} 条）
               </button>
             </div>
           )}

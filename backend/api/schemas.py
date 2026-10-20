@@ -43,12 +43,11 @@ class VersionDetail(VersionMeta):
 
 
 class RuntimeBootstrapResponse(BaseModel):
-    """Everything the deterministic renderer needs in one round trip."""
+    """Model-only render payload; rows are fetched page by page."""
 
     app_key: str
     version: int
     model: dict[str, Any]
-    records: dict[str, list[dict[str, Any]]]
 
 
 class ConfirmResponse(BaseModel):

@@ -1,14 +1,16 @@
-import { useMemo, useState, type CSSProperties } from 'react'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { useState, type CSSProperties } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 
+import { fetchRows } from '../../api/runtime'
 import { formatCell } from '../format'
 import { resolveAppRoute } from '../appRoute'
 import {
   DEFAULT_PAGE_SIZE,
   PAGE_SIZE_OPTIONS,
   activeFilterCount,
-  applyListQuery,
-  buildFilterOptions,
+  activeSorts,
+  facetOptions,
   pageWindow,
   type FilterOption,
   type FilterState,
@@ -17,11 +19,6 @@ import { EmptyState, ModelError } from '../widgets'
 import { findViewForEntity, getEntity, getField } from '../resolve'
 import { useRuntime } from '../useRuntime'
 import type { BusinessField, ListView as ListViewModel, SortSpec } from '../types'
-
-interface ColumnSort {
-  field: string
-  dir: 'asc' | 'desc'
-}
 
 function FilterDropdown({
   field,
@@ -168,7 +165,7 @@ function Pager({
 }
 
 export function ListView({ view }: { view: ListViewModel }) {
-  const { bootstrap, records, readOnly, deleteRecord } = useRuntime()
+  const { bootstrap, apiBase, readOnly, deleteRecord } = useRuntime()
   const location = useLocation()
   const { basePath } = resolveAppRoute(location.pathname)
   const model = bootstrap.model
@@ -177,35 +174,44 @@ export function ListView({ view }: { view: ListViewModel }) {
   const [search, setSearch] = useState('')
   const [filters, setFilters] = useState<FilterState>({})
   // null = honor the model's default sorts; clicking a header overrides.
-  const [userSort, setUserSort] = useState<ColumnSort | null>(null)
+  const [userSort, setUserSort] = useState<SortSpec | null>(null)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [openFilter, setOpenFilter] = useState<string | null>(null)
 
-  const result0 = useMemo(() => {
-    if (!entity) return null
-    const rows = records[view.entity] ?? []
-    const sorts: SortSpec[] = userSort ? [userSort] : (view.sorts ?? [])
-    return applyListQuery(
-      rows,
-      {
-        search,
-        searchKeys: view.search ?? [],
-        filters,
-        sorts,
+  const sorts = activeSorts(userSort, view.sorts)
+  const { data, isPending, isError } = useQuery({
+    queryKey: [
+      'rows',
+      apiBase,
+      view.entity,
+      search,
+      filters,
+      sorts,
+      page,
+      pageSize,
+      view.search,
+      view.filters,
+    ],
+    queryFn: () =>
+      fetchRows(apiBase, view.entity, {
         page,
         pageSize,
-      },
-      (key) => getField(entity, key),
-    )
-  }, [entity, records, view.entity, view.search, view.sorts, search, filters, userSort, page, pageSize])
+        search,
+        searchFields: view.search ?? [],
+        filters,
+        sorts,
+        facets: view.filters ?? [],
+      }),
+    // Keep the current page on screen while the next one loads, so paging
+    // never flashes an empty grid or collapses the fixed row heights.
+    placeholderData: keepPreviousData,
+  })
 
-  if (!entity || !result0) {
+  if (!entity) {
     return <ModelError>列表视图 {view.key} 引用了不存在的实体。</ModelError>
   }
-  const result = result0
 
-  const allRows = records[view.entity] ?? []
   const detailView = findViewForEntity(model, view.entity, 'detail')
   const formView = findViewForEntity(model, view.entity, 'form')
   const columns = view.columns
@@ -220,11 +226,14 @@ export function ListView({ view }: { view: ListViewModel }) {
     .map((key) => getField(entity, key)?.name)
     .filter((name): name is string => Boolean(name))
 
-  const activeSorts: SortSpec[] = userSort ? [userSort] : (view.sorts ?? [])
   const sortOf = (fieldKey: string) =>
-    activeSorts.find((sort) => sort.field === fieldKey)
+    sorts.find((sort) => sort.field === fieldKey)
   const filterCount = activeFilterCount(filters)
   const filtered = search.trim() !== '' || filterCount > 0
+  const rows = data?.rows ?? []
+  const total = data?.total ?? 0
+  const currentPage = data?.page ?? page
+  const pageCount = data?.page_count ?? 1
 
   const cycleSort = (fieldKey: string) => {
     setPage(1)
@@ -264,7 +273,11 @@ export function ListView({ view }: { view: ListViewModel }) {
         <div>
           <h1>{view.title}</h1>
           <p className="view-sub">
-            {filtered ? `筛出 ${result.total} 条 / 共 ${allRows.length} 条` : `共 ${allRows.length} 条记录`}
+            {!data
+              ? '正在加载…'
+              : filtered
+                ? `筛出 ${total} 条 / 共 ${data.entity_total} 条`
+                : `共 ${data.entity_total} 条记录`}
           </p>
         </div>
         {formView && !readOnly && (
@@ -303,7 +316,7 @@ export function ListView({ view }: { view: ListViewModel }) {
                 <FilterDropdown
                   key={field.key}
                   field={field}
-                  options={buildFilterOptions(allRows, field)}
+                  options={facetOptions(data?.facets[field.key])}
                   selected={filters[field.key] ?? []}
                   open={openFilter === field.key}
                   onOpenChange={(open) => setOpenFilter(open ? field.key : null)}
@@ -328,14 +341,16 @@ export function ListView({ view }: { view: ListViewModel }) {
 
       <div
         className="card grid-card"
-        data-paged={result.total > 0 ? 'true' : undefined}
+        data-paged={total > 0 ? 'true' : undefined}
         style={
-          result.total > 0
-            ? ({ '--grid-rows': pageSize } as CSSProperties)
-            : undefined
+          total > 0 ? ({ '--grid-rows': pageSize } as CSSProperties) : undefined
         }
       >
-        {result.total === 0 ? (
+        {isError ? (
+          <EmptyState>记录加载失败，请刷新页面重试。</EmptyState>
+        ) : isPending && !data ? (
+          <EmptyState>正在加载记录…</EmptyState>
+        ) : total === 0 ? (
           <EmptyState>
             {filtered ? (
               <>
@@ -379,7 +394,7 @@ export function ListView({ view }: { view: ListViewModel }) {
               </tr>
             </thead>
             <tbody>
-              {result.rows.map((row) => {
+              {rows.map((row) => {
                 const rowKey = String(row[entity.key_field] ?? '')
                 return (
                   <tr key={rowKey}>
@@ -441,10 +456,10 @@ export function ListView({ view }: { view: ListViewModel }) {
         )}
       </div>
 
-      {result.total > 0 && (
+      {total > 0 && (
         <Pager
-          page={result.page}
-          pageCount={result.pageCount}
+          page={currentPage}
+          pageCount={pageCount}
           pageSize={pageSize}
           onChange={updatePager}
         />
