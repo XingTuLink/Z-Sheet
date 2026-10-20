@@ -30,12 +30,12 @@
 </p>
 
 <p align="center">
-  <img alt="版本" src="https://img.shields.io/badge/version-0.1.0--alpha.2-blue" />
+  <img alt="版本" src="https://img.shields.io/badge/version-0.1.0--beta.1-blue" />
   <img alt="许可证" src="https://img.shields.io/badge/license-AGPL--3.0-green" />
   <img alt="状态" src="https://img.shields.io/badge/status-experimental-orange" />
 </p>
 
-> **0.1.0-alpha.2 实验性版本** · 核心闭环（Excel → AI 理解 → 人工审查 → 可用系统 → 一句话修改）已跑通 · 面向早期试用者，接口与界面仍可能调整 · 详见 [CHANGELOG.md](./CHANGELOG.md)
+> **0.1.0-beta.1 实验性版本** · 核心闭环（Excel → AI 理解 → 人工审查 → 可用系统 → 一句话修改）已在 10 份不同业务表上验证 · 面向早期试用者，接口与界面仍可能调整 · 详见 [CHANGELOG.md](./CHANGELOG.md)
 
 ---
 
@@ -140,7 +140,7 @@ Z-Sheet 走的是另一条更轻的路径：**你手里那份已经用了很久�
 
 ​                                                    <img src="docs/assets/nl-patch.gif" alt="一句话修改系统：预览后确认生效" width="720" /> 
 
-## 当前能力（0.1.0-alpha.2）
+## 当前能力（0.1.0-beta.1）
 
 想先跑起来的直接跳到[快速开始](#快速开始docker推荐)；以下是逐项能力，方便评估。
 
@@ -178,7 +178,7 @@ Z-Sheet 走的是另一条更轻的路径：**你手里那份已经用了很久�
 **交付与运维**
 
 - 单容器（FastAPI 同时提供 API 与构建后的 SPA）、Alembic 自动迁移、SQLite 数据卷、容器健康检查与自动重启
-- 内置演示系统（销售管理）与 4 份真实感演示数据集（`examples/demo_data/`）
+- 内置演示系统（销售管理）与 10 份真实感演示数据集（`examples/demo_data/`，覆盖销售、库存、客户跟进、人员登记、采购、固定资产、项目、生产、人事、物流）
 
 </details>
 
@@ -313,7 +313,7 @@ backend/runtime         渲染运行时引导（model + data）
 backend/api             FastAPI 路由（解析 / 确认 / 模型管理 / Patch / 运行时 / 发布）
 migrations              Alembic 迁移
 frontend/src/renderer   类型驱动的确定性渲染（View Resolver + 视图组件）
-examples                演示模型、种子数据与 4 份演示 Excel 数据集
+examples                演示模型、种子数据与 10 份演示 Excel 数据集
 docker                  镜像与入口脚本
 ```
 

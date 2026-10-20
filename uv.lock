@@ -1060,7 +1060,7 @@ wheels = [
 
 [[package]]
 name = "zsheet"
-version = "0.1.0-alpha.2"
+version = "0.1.0-beta.1"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },

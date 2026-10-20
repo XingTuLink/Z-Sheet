@@ -605,6 +605,11 @@ def build_llm_links(
             notes.append("LLM 关联使用了子表自身主键作为外键，已忽略")
             continue
 
+        # The overlap below is scored on exactly the two proposed columns, so
+        # the stored link has to reference that same pair: rewriting the parent
+        # side to its key field would leave the evidence and the link pointing
+        # at different columns, and no child row could ever match.
+        on_from_field = parent.field_keys[on_from_column]
         field_keys = unique_field_keys(child.sheet.columns)[0]
         on_to_field = dict(zip(child.sheet.columns, field_keys, strict=True))[
             on_to_column
@@ -642,7 +647,7 @@ def build_llm_links(
                 key=f"{parent.key}_to_{child.key}",
                 from_entity=parent.key,
                 to_entity=child.key,
-                on_from=parent.key_field_key,
+                on_from=on_from_field,
                 on_to=on_to_field,
                 confidence=confidence,
                 needs_review=True,
