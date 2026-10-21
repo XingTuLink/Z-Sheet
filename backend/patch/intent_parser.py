@@ -34,6 +34,8 @@ from backend.domain.models import (
     FormView,
     ListView,
 )
+from backend.understanding.naming import field_key as glossary_field_key
+from backend.understanding.naming import sanitize_key
 
 # --- intent taxonomy -----------------------------------------------------------------
 
@@ -46,6 +48,7 @@ class IntentKind(StrEnum):
     """
 
     RENAME = "rename"
+    ENTITY_ADD = "entity_add"
     FIELD_ADD = "field_add"
     FIELD_REMOVE = "field_remove"
     FIELD_UPDATE = "field_update"
@@ -85,6 +88,8 @@ _NUMERIC_FIELD_TYPES: frozenset[str] = frozenset({FieldType.NUMBER, FieldType.MO
 RELATED_LIST_MIN, RELATED_LIST_MAX = 1, 50
 DEFAULT_RELATED_LIST_LIMIT = 10
 MAX_NEW_NAME_LENGTH = 30
+MAX_NEW_MODULE_FIELDS = 20
+MAX_NEW_MODULE_LINKS = 3
 
 # entity/field intents that genuinely need the entity slot
 _ENTITY_REQUIRED_KINDS: frozenset[IntentKind] = frozenset(set(IntentKind) - {IntentKind.RENAME})
@@ -112,6 +117,27 @@ _SUPPORTED_CATEGORIES = frozenset(UnsupportedCategory)
 # --- structured output ----------------------------------------------------------------
 
 
+class NewFieldSpec(BaseModel):
+    """One field of a proposed module, already keyed deterministically."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    name: str = Field(min_length=1)
+    type: FieldType
+    role: FieldRole
+    values: list[str] | None = None
+
+
+class NewLinkSpec(BaseModel):
+    """A proposed link from an existing entity to the new module."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    entity_key: str
+    field_key: str
+
+
 class ParsedIntent(BaseModel):
     """One grounded, validated modification intent."""
 
@@ -133,6 +159,11 @@ class ParsedIntent(BaseModel):
     limit: int | None = None
     metric_op: MetricOp | None = None
     metric_field_key: str | None = None
+    # entity_add carries the whole proposed module structure.
+    new_entity_name: str | None = None
+    new_entity_key: str | None = None
+    new_fields: list[NewFieldSpec] | None = None
+    new_links: list[NewLinkSpec] | None = None
     # metric_remove addresses an existing metric by its own key.
     target_metric_key: str | None = None
     # True when the field_update would change which field is the identifier.
@@ -227,6 +258,16 @@ INTENT_SYSTEM_PROMPT = """你是 Z-Sheet 的「修改意图理解器」。用户
   - 都省略 → 改应用名，params: {"new_name": "新名称"}；
   - 只有 entity → 改实体显示名；
   - entity + field → 改字段显示名（params.new_name）。
+- entity_add：新增一个功能模块（实体 + 列表 / 详情 / 表单视图，不含业务数据）。
+  entity 填新模块名称；params:
+  {"key": "英文蛇形标识（如 supplier）",
+   "fields": [{"name": "字段中文名", "type": "string|number|money|date|enum|phone",
+               "role": "identifier|dimension|measure|time|enum|text",
+               "values": ["枚举值"]（仅 enum 必填）}],
+   "metric": {"op": "count|sum", "field": "金额字段名"}（可选，默认 count），
+   "links": [{"entity": "已有实体名称", "on_field": "新模块中用于关联的字段名"}]（可选）}。
+  规则：fields 必须且只能有一个 role 为 identifier 的字段；links 里的 entity
+  必须是当前系统已有实体，on_field 必须是本次新增字段之一。
 - field_add：实体新增字段。params:
   {"name": "字段中文名", "type": "string|number|money|date|enum|phone",
    "role": "identifier|dimension|measure|time|enum|text",
@@ -255,7 +296,8 @@ category 取值：
 - data_edit：新增/修改/删除业务数据行（如“把张三的电话改成…”）——应在系统页面直接操作数据；
 - conditional_format：标红、颜色、条件格式、样式——V0.1 渲染器不支持；
 - time_window_metric：本月/本周/本年/同比/环比/趋势等带时间窗的统计——V0.1 指标不支持时间过滤；
-- entity_change：新增/删除整张实体表——需要重新上传包含对应工作表的 Excel；
+- entity_change：删除整张实体表——如需删除整张表请重新整理数据源后重新生成系统；
+  新增实体请用 entity_add；
 - many_to_many：多对多关系——V0.1 只支持一对多；
 - layout：拖拽布局、页面位置调整；
 - permission：权限、角色、账号；
@@ -267,6 +309,7 @@ category 取值：
 ## 规则
 
 1. 只能引用输入模型里真实存在的实体/字段名称，严禁编造；不确定就放 notes 或解析为 unsupported。
+   例外：entity_add 的 entity 和 fields 描述的是新模块本身；其中 links.entity 仍必须是已有实体。
 2. 一句话可能包含多个意图（如“列表加跟进状态筛选并按更新时间倒序”），拆成两条。
 3. 与修改模型无关的寒暄、提问（“这是什么”“怎么做的”）输出空 intents 并在 notes 说明。
 4. params 只放与该 kind 相关的键；new_name 原样保留中文，不要擅自美化。
@@ -435,6 +478,173 @@ def _build_unsupported(spec: LLMIntentSpec) -> UnsupportedIntent | None:
     )
 
 
+def _unique_key(base: str, used: set[str]) -> str:
+    if base not in used:
+        return base
+    suffix = 2
+    while f"{base}_{suffix}" in used:
+        suffix += 1
+    return f"{base}_{suffix}"
+
+
+def _ground_entity_add(
+    model: BusinessModel,
+    spec: LLMIntentSpec,
+    params: dict[str, Any],
+    notes: list[str],
+) -> ParsedIntent | None:
+    """Ground a new-module proposal: validate fields, links and metric slot.
+
+    The module content is user-authored via the LLM, so it is not resolved
+    against existing nodes; only link targets and the metric field are.
+    """
+    name = _clean_new_name(spec.entity) or _clean_new_name(params.get("name"))
+    if not name:
+        notes.append("新增模块意图缺少模块名称，已忽略")
+        return None
+    if any(entity.name.strip().lower() == name.lower() for entity in model.entities):
+        notes.append(
+            f"系统里已经有「{name}」模块，新增请求已忽略；如需调整请直接修改该模块。"
+        )
+        return None
+
+    raw_fields = params.get("fields")
+    if not isinstance(raw_fields, list) or not raw_fields:
+        notes.append(f"新增「{name}」模块至少需要一个字段，已忽略")
+        return None
+    if len(raw_fields) > MAX_NEW_MODULE_FIELDS:
+        notes.append(
+            f"新增模块一次最多支持 {MAX_NEW_MODULE_FIELDS} 个字段，超出部分已忽略"
+        )
+
+    fields: list[NewFieldSpec] = []
+    used_field_keys: set[str] = set()
+    used_names: set[str] = set()
+    for entry in raw_fields[:MAX_NEW_MODULE_FIELDS]:
+        if not isinstance(entry, dict):
+            notes.append("新增模块的字段描述格式不正确，已忽略该项")
+            continue
+        field_name = _clean_new_name(entry.get("name"))
+        if not field_name:
+            notes.append("新增模块中有字段缺少名称，已忽略该项")
+            continue
+        if field_name.lower() in used_names:
+            notes.append(f"新模块中字段「{field_name}」重复出现，只保留第一个")
+            continue
+        try:
+            field_type = FieldType(str(entry.get("type", FieldType.STRING)).strip())
+            field_role = FieldRole(str(entry.get("role", FieldRole.TEXT)).strip())
+        except ValueError:
+            notes.append(f"新模块字段「{field_name}」的类型/角色不合法，已忽略该项")
+            continue
+        values: list[str] | None = None
+        if field_type is FieldType.ENUM:
+            raw_values = entry.get("values")
+            if not isinstance(raw_values, list) or not all(
+                isinstance(value, str) and value.strip() for value in raw_values
+            ):
+                notes.append(f"新模块枚举字段「{field_name}」缺少非空枚举值，已忽略该项")
+                continue
+            values = [value.strip() for value in raw_values]
+        base_key, _hit = glossary_field_key(field_name, len(fields))
+        field_key = _unique_key(base_key, used_field_keys)
+        used_field_keys.add(field_key)
+        used_names.add(field_name.lower())
+        fields.append(
+            NewFieldSpec(
+                key=field_key,
+                name=field_name,
+                type=field_type,
+                role=field_role,
+                values=values,
+            )
+        )
+
+    if not fields:
+        notes.append(f"新增「{name}」模块没有可用的字段，已忽略")
+        return None
+
+    identifiers = [field for field in fields if field.role is FieldRole.IDENTIFIER]
+    if len(identifiers) > 1:
+        notes.append("新增模块只能有一个唯一标识字段，请指定其中一个后重试，本次已忽略")
+        return None
+    if not identifiers:
+        first = fields[0]
+        fields[0] = first.model_copy(update={"role": FieldRole.IDENTIFIER})
+        notes.append(
+            f"新增模块没有指定唯一标识字段，已将第一个字段「{first.name}」作为标识。"
+        )
+
+    raw_key = params.get("key")
+    base_key = sanitize_key(str(raw_key)) if raw_key else None
+    if base_key is None:
+        base_key = f"entity_{len(model.entities) + 1}"
+    entity_key = _unique_key(base_key, {entity.key for entity in model.entities})
+
+    links: list[NewLinkSpec] = []
+    raw_links = params.get("links")
+    if isinstance(raw_links, list) and raw_links:
+        by_name = {field.name: field for field in fields}
+        by_key = {field.key: field for field in fields}
+        seen_parents: set[str] = set()
+        for entry in raw_links[:MAX_NEW_MODULE_LINKS]:
+            if not isinstance(entry, dict):
+                notes.append("新增模块的关联描述格式不正确，已忽略该项")
+                continue
+            parent = _find_entity(model, str(entry.get("entity") or ""))
+            if parent is None:
+                notes.append(
+                    f"关联目标 {entry.get('entity')!r} 在当前系统中不存在，已忽略该关联"
+                )
+                continue
+            if parent.key in seen_parents:
+                continue
+            reference = str(entry.get("on_field") or "").strip()
+            target_field = by_name.get(reference) or by_key.get(reference)
+            if target_field is None:
+                notes.append(
+                    f"关联字段「{reference}」不在新模块字段中，"
+                    f"已忽略与「{parent.name}」的关联"
+                )
+                continue
+            seen_parents.add(parent.key)
+            links.append(NewLinkSpec(entity_key=parent.key, field_key=target_field.key))
+
+    metric_op = MetricOp.COUNT
+    metric_field_key: str | None = None
+    raw_metric = params.get("metric")
+    if isinstance(raw_metric, dict):
+        op_value = str(raw_metric.get("op", MetricOp.COUNT)).strip()
+        if op_value == MetricOp.SUM.value:
+            reference = str(raw_metric.get("field") or "").strip()
+            target = next(
+                (field for field in fields if field.name == reference or field.key == reference),
+                None,
+            )
+            if target is not None and target.type.value in _NUMERIC_FIELD_TYPES:
+                metric_op = MetricOp.SUM
+                metric_field_key = target.key
+            else:
+                notes.append(
+                    f"「{name}」的合计指标需要引用数值/金额字段，已改为记录总数指标"
+                )
+        elif op_value != MetricOp.COUNT.value:
+            notes.append(f"新增模块暂不支持 {op_value!r} 指标，已改为记录总数指标")
+
+    return ParsedIntent(
+        kind=IntentKind.ENTITY_ADD,
+        risk=RiskLevel.LOW,
+        new_entity_name=name,
+        new_entity_key=entity_key,
+        new_fields=fields,
+        new_links=links or None,
+        metric_op=metric_op,
+        metric_field_key=metric_field_key,
+        confidence=spec.confidence,
+        reason=spec.reason.strip(),
+    )
+
+
 def _ground_intent(
     model: BusinessModel,
     spec: LLMIntentSpec,
@@ -485,6 +695,11 @@ def _ground_intent(
             confidence=spec.confidence,
             reason=spec.reason.strip(),
         )
+
+    # New module: the entity slot names something that does not exist yet, so
+    # it must be grounded before the existing-entity resolution below.
+    if kind is IntentKind.ENTITY_ADD:
+        return _ground_entity_add(model, spec, params, notes)
 
     if kind in _ENTITY_REQUIRED_KINDS and not spec.entity:
         notes.append(f"意图 {kind.value} 缺少实体名称，已忽略")

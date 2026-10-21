@@ -15,7 +15,7 @@ const UNSUPPORTED_LABELS: Record<string, string> = {
   data_edit: '修改业务数据',
   conditional_format: '条件格式/标色',
   time_window_metric: '时间窗口指标',
-  entity_change: '新增/删除实体',
+  entity_change: '删除实体',
   many_to_many: '多对多关联',
   layout: '自由布局调整',
   permission: '权限管理',
@@ -29,6 +29,7 @@ const EXAMPLES = [
   '客户列表加一个按负责人筛选',
   '订单列表默认按下单日期从新到旧排序',
   '在客户里加一个微信号文本字段',
+  '新增一个供应商模块，包含名称、联系人和电话',
 ]
 
 interface PatchHistoryEntry {

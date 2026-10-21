@@ -25,15 +25,29 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from backend.domain.enums import DetailBlockType, FieldRole, FieldType, MetricOp
+from backend.domain.enums import (
+    DetailBlockType,
+    FieldRole,
+    FieldType,
+    LinkType,
+    MetricOp,
+    SortDir,
+)
 from backend.domain.models import (
     BusinessField,
     BusinessModel,
     DashboardView,
     DetailBlock,
+    DetailView,
+    Entity,
+    FormView,
+    Link,
+    LinkOn,
+    ListView,
     Metric,
     MetricFormula,
     NavigationItem,
+    SortSpec,
 )
 from backend.patch.apply import PatchError, apply_patch
 from backend.patch.intent_parser import (
@@ -51,6 +65,8 @@ from backend.understanding.naming import field_key as glossary_field_key
 # confidence tier and never enter the understanding review queue.
 USER_AUTHORED_CONFIDENCE = 1.0
 DASHBOARD_KEY = "home_dashboard"
+MAX_MODULE_LIST_COLUMNS = 6
+MAX_MODULE_FILTERS = 4
 
 _FIELD_TYPE_LABELS: dict[FieldType, str] = {
     FieldType.STRING: "文本",
@@ -255,6 +271,8 @@ class _PatchBuilder:
         kind = intent.kind
         if kind is IntentKind.RENAME:
             return self._rename(intent)
+        if kind is IntentKind.ENTITY_ADD:
+            return self._entity_add(intent)
         if kind is IntentKind.FIELD_ADD:
             return self._field_add(intent)
         if kind is IntentKind.FIELD_REMOVE:
@@ -283,6 +301,220 @@ class _PatchBuilder:
         if kind is IntentKind.LINK_REMOVE:
             return self._link_remove(intent)
         raise PatchGenerationError(f"暂不支持的修改类型：{kind.value}")  # pragma: no cover
+
+    # -- new modules ----------------------------------------------------------
+
+    def _claim_key(self, used: set[str], base: str, fallback: str) -> str:
+        key = _dedupe_key(used, base, fallback)
+        used.add(key)
+        return key
+
+    def _entity_add(self, intent: ParsedIntent) -> list[dict[str, Any]]:
+        assert (
+            intent.new_entity_name is not None
+            and intent.new_entity_key is not None
+            and intent.new_fields is not None
+        )
+        name = intent.new_entity_name
+        entity_key = intent.new_entity_key
+        if any(entity["key"] == entity_key for entity in self.doc["entities"]):
+            raise PatchGenerationError(
+                f"系统里已经有标识为 {entity_key!r} 的模块，无法重复新增。"
+            )
+        if any(
+            entity["name"].strip().lower() == name.lower()
+            for entity in self.doc["entities"]
+        ):
+            raise PatchGenerationError(f"系统里已经有「{name}」模块，无法重复新增。")
+
+        fields = [
+            BusinessField(
+                key=spec.key,
+                name=spec.name,
+                type=spec.type,
+                role=spec.role,
+                values=spec.values,
+                confidence=USER_AUTHORED_CONFIDENCE,
+                needs_review=False,
+            )
+            for spec in intent.new_fields
+        ]
+        key_field = next(
+            field.key for field in fields if field.role is FieldRole.IDENTIFIER
+        )
+        entity = Entity(
+            key=entity_key,
+            name=name,
+            source=None,
+            key_field=key_field,
+            fields=fields,
+        )
+        ops: list[dict[str, Any]] = [
+            _add("/entities/-", entity.model_dump(mode="json"))
+        ]
+
+        used_view_keys = {view["key"] for view in self.doc["views"]}
+        list_key = self._claim_key(
+            used_view_keys, f"{entity_key}_list", f"{entity_key}_view"
+        )
+        detail_key = self._claim_key(
+            used_view_keys, f"{entity_key}_detail", f"{entity_key}_detail_view"
+        )
+        form_key = self._claim_key(
+            used_view_keys, f"{entity_key}_form", f"{entity_key}_form_view"
+        )
+
+        columns = [key_field] + [
+            spec.key for spec in intent.new_fields if spec.key != key_field
+        ]
+        columns = columns[:MAX_MODULE_LIST_COLUMNS]
+        search = list(
+            dict.fromkeys(
+                [key_field]
+                + [
+                    spec.key
+                    for spec in intent.new_fields
+                    if spec.type is FieldType.PHONE
+                ]
+            )
+        )
+        filters = [
+            spec.key
+            for spec in intent.new_fields
+            if spec.key != key_field
+            and (spec.type is FieldType.ENUM or spec.role is FieldRole.DIMENSION)
+        ][:MAX_MODULE_FILTERS]
+        time_field = next(
+            (spec for spec in intent.new_fields if spec.role is FieldRole.TIME), None
+        )
+        sorts = (
+            [SortSpec(field=time_field.key, dir=SortDir.DESC)]
+            if time_field is not None
+            else []
+        )
+
+        ops.append(
+            _add(
+                "/views/-",
+                ListView(
+                    kind="list",
+                    key=list_key,
+                    entity=entity_key,
+                    title=name,
+                    columns=columns,
+                    search=search,
+                    filters=filters,
+                    sorts=sorts,
+                ).model_dump(mode="json"),
+            )
+        )
+        ops.append(
+            _add(
+                "/views/-",
+                DetailView(
+                    kind="detail",
+                    key=detail_key,
+                    entity=entity_key,
+                    title=f"{name}详情",
+                    blocks=[DetailBlock(type=DetailBlockType.FIELDS)],
+                ).model_dump(mode="json"),
+            )
+        )
+        ops.append(
+            _add(
+                "/views/-",
+                FormView(
+                    kind="form",
+                    key=form_key,
+                    entity=entity_key,
+                    title=f"{name}表单",
+                    fields=None,
+                ).model_dump(mode="json"),
+            )
+        )
+
+        link_notes: list[str] = []
+        used_link_keys = {link["key"] for link in self.doc["links"]}
+        for spec in intent.new_links or []:
+            parent = _entity(self.doc, spec.entity_key)
+            link_key = self._claim_key(
+                used_link_keys,
+                f"{spec.entity_key}_to_{entity_key}",
+                f"link_{len(used_link_keys) + 1}",
+            )
+            link = Link(
+                key=link_key,
+                **{"from": spec.entity_key},
+                to=entity_key,
+                type=LinkType.ONE_TO_MANY,
+                on=LinkOn(**{"from": parent["key_field"], "to": spec.field_key}),
+                confidence=USER_AUTHORED_CONFIDENCE,
+                needs_review=False,
+            )
+            ops.append(_add("/links/-", link.model_dump(mode="json")))
+            for view_index, view in _views_of(
+                self.doc, kind="detail", entity_key=spec.entity_key
+            ):
+                if any(
+                    block.get("link") == link_key for block in view["blocks"]
+                ):
+                    continue
+                block = DetailBlock(
+                    type=DetailBlockType.RELATED_LIST,
+                    link=link_key,
+                    title=f"关联{name}",
+                ).model_dump(mode="json")
+                ops.append(_add(f"/views/{view_index}/blocks/-", block))
+            link_notes.append(
+                f"已建立「{parent['name']}」→「{name}」的一对多关联，"
+                f"并在「{parent['name']}」详情页添加关联列表。"
+            )
+
+        metric_op = intent.metric_op or MetricOp.COUNT
+        metric_field_key = (
+            intent.metric_field_key if metric_op is MetricOp.SUM else None
+        )
+        if metric_op is MetricOp.SUM and metric_field_key is not None:
+            target_field = next(
+                spec for spec in intent.new_fields if spec.key == metric_field_key
+            )
+            metric_name = f"{target_field.name}合计"
+            definition = f"{name}「{target_field.name}」的合计值"
+            metric_base_key = f"total_{metric_field_key}"
+        else:
+            metric_op = MetricOp.COUNT
+            metric_name = f"{name}总数"
+            definition = f"{name}记录的总条数"
+            metric_base_key = f"{entity_key}_count"
+        used_metric_keys = {metric["key"] for metric in self.doc["metrics"]}
+        metric_key = self._claim_key(
+            used_metric_keys, metric_base_key, f"{entity_key}_metric"
+        )
+        metric = Metric(
+            key=metric_key,
+            name=metric_name,
+            entity=entity_key,
+            formula=MetricFormula(op=metric_op, field=metric_field_key),
+            business_definition=definition,
+            confidence=USER_AUTHORED_CONFIDENCE,
+            needs_review=False,
+        )
+        ops.append(_add("/metrics/-", metric.model_dump(mode="json")))
+        self._attach_metric_card(ops, metric_key)
+
+        ops.append(
+            _add(
+                "/navigation/-",
+                NavigationItem(label=name, view=list_key).model_dump(mode="json"),
+            )
+        )
+
+        self.notes.append(
+            f"新增「{name}」模块：{len(fields)} 个字段，已生成列表、详情、表单视图。"
+        )
+        self.notes.append(f"首页新增指标「{metric_name}」。")
+        self.notes.extend(link_notes)
+        return ops
 
     # -- rename ---------------------------------------------------------------
 
@@ -677,36 +909,39 @@ class _PatchBuilder:
             needs_review=False,
         )
         ops = [_add("/metrics/-", metric.model_dump(mode="json"))]
+        self._attach_metric_card(ops, key)
+        self.notes.append(f"首页新增指标「{name}」。")
+        return ops
 
+    def _attach_metric_card(
+        self, ops: list[dict[str, Any]], metric_key: str
+    ) -> None:
+        """Place a metric on every dashboard, creating one when none exists."""
         dashboards = _views_of(self.doc, kind="dashboard")
         if dashboards:
             for view_index, dashboard in dashboards:
-                if key not in dashboard["metrics"]:
-                    ops.append(_add(f"/views/{view_index}/metrics/-", key))
-        else:
-            view_keys = {view["key"] for view in self.doc["views"]}
-            dashboard_key = DASHBOARD_KEY
-            suffix = 2
-            while dashboard_key in view_keys:
-                dashboard_key = f"{DASHBOARD_KEY}_{suffix}"
-                suffix += 1
-            dashboard = DashboardView(
-                kind="dashboard",
-                key=dashboard_key,
-                title="首页",
-                metrics=[key],
-            ).model_dump(mode="json")
-            ops.append(_add("/views/-", dashboard))
-            ops.append(
-                _add(
-                    "/navigation/0",
-                    NavigationItem(label="首页", view=dashboard_key).model_dump(
-                        mode="json"
-                    ),
-                )
+                if metric_key not in dashboard["metrics"]:
+                    ops.append(_add(f"/views/{view_index}/metrics/-", metric_key))
+            return
+        view_keys = {view["key"] for view in self.doc["views"]}
+        dashboard_key = DASHBOARD_KEY
+        suffix = 2
+        while dashboard_key in view_keys:
+            dashboard_key = f"{DASHBOARD_KEY}_{suffix}"
+            suffix += 1
+        dashboard = DashboardView(
+            kind="dashboard",
+            key=dashboard_key,
+            title="首页",
+            metrics=[metric_key],
+        ).model_dump(mode="json")
+        ops.append(_add("/views/-", dashboard))
+        ops.append(
+            _add(
+                "/navigation/0",
+                NavigationItem(label="首页", view=dashboard_key).model_dump(mode="json"),
             )
-        self.notes.append(f"首页新增指标「{name}」。")
-        return ops
+        )
 
     def _metric_remove(self, intent: ParsedIntent) -> list[dict[str, Any]]:
         assert intent.target_metric_key is not None

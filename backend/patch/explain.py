@@ -91,6 +91,32 @@ def _summarize(model: BusinessModel, intent: ParsedIntent) -> str:
             return f"将「{entity}」改名为「{intent.new_name}」"
         return f"将「{entity}」的字段「{field}」改名为「{intent.new_name}」"
 
+    if kind is IntentKind.ENTITY_ADD:
+        module_name = intent.new_entity_name or "新模块"
+        field_names = "、".join(field.name for field in intent.new_fields or [])
+        text = (
+            f"新增「{module_name}」模块（字段：{field_names}），"
+            "并生成列表、详情、表单视图"
+        )
+        if intent.new_links:
+            parents = "、".join(
+                _entity_name(model, link.entity_key) for link in intent.new_links
+            )
+            text += f"，关联到「{parents}」"
+        if intent.metric_op is MetricOp.SUM and intent.metric_field_key is not None:
+            metric_field = next(
+                (
+                    field.name
+                    for field in intent.new_fields or []
+                    if field.key == intent.metric_field_key
+                ),
+                intent.metric_field_key,
+            )
+            text += f"，首页添加「{metric_field}」合计指标"
+        else:
+            text += "，首页添加计数指标"
+        return text
+
     if kind is IntentKind.FIELD_ADD:
         type_label = _FIELD_TYPE_LABELS.get(intent.field_type, "文本")  # type: ignore[arg-type]
         text = f"在「{entity}」中新增{type_label}字段「{intent.new_name}」"

@@ -67,6 +67,24 @@ UNSUPPORTED_RESPONSE: dict[str, Any] = {
             "reason": "这是修改业务数据，不是修改系统结构",
             "suggestion": "请直接在列表页编辑该行数据",
         }
+    ],
+}
+MODULE_ADD_RESPONSE: dict[str, Any] = {
+    "intents": [
+        {
+            "kind": "entity_add",
+            "entity": "供应商",
+            "params": {
+                "key": "supplier",
+                "fields": [
+                    {"name": "供应商名称", "type": "string", "role": "identifier"},
+                    {"name": "联系人", "type": "string", "role": "text"},
+                    {"name": "客户名称", "type": "string", "role": "dimension"},
+                ],
+                "links": [{"entity": "客户", "on_field": "客户名称"}],
+            },
+            "confidence": 0.9,
+        }
     ]
 }
 
@@ -167,6 +185,40 @@ def test_confirm_applies_cached_ops_as_new_version():
 
     current = client.get("/api/v1/models/default").json()
     assert current["version"] == 2
+
+
+def test_entity_add_preview_confirms_into_new_module():
+    _import()
+    body = _preview(MODULE_ADD_RESPONSE, text="新增一个供应商模块").json()
+    assert body["actionable"] is True
+    assert body["unsupported"] == []
+    assert body["requires_confirmation"] is False
+    assert body["changes"][0]["kind"] == "entity_add"
+    assert "新增「供应商」模块" in body["changes"][0]["summary"]
+    # Preview must not create a version.
+    assert client.get("/api/v1/models/default").json()["version"] == 1
+
+    applied = _confirm("default", body["session_id"])
+    assert applied.status_code == 200, applied.text
+    version = applied.json()
+    assert version["version"] == 2
+
+    snapshot = version["snapshot"]
+    supplier = next(
+        entity for entity in snapshot["entities"] if entity["key"] == "supplier"
+    )
+    assert supplier["key_field"] == "supplier_name"
+    assert len(supplier["fields"]) == 3
+
+    supplier_views = [
+        view
+        for view in snapshot["views"]
+        if view.get("entity") == "supplier"
+    ]
+    assert {view["kind"] for view in supplier_views} == {"list", "detail", "form"}
+    assert any(item["label"] == "供应商" for item in snapshot["navigation"])
+    assert any(metric["entity"] == "supplier" for metric in snapshot["metrics"])
+    assert any(link["to"] == "supplier" for link in snapshot["links"])
 
 
 def test_high_risk_change_is_flagged_but_still_applies_on_confirm():
