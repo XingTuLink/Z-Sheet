@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 
-import { appApiBase, fetchBootstrap } from '../api/runtime'
+import { RecordApiError, appApiBase, fetchBootstrap } from '../api/runtime'
 import { BrandLockup, CompanyByline, CompanyFooter, LOGO_SRC } from '../components/Brand'
 import { AppendDataDialog } from './AppendDataDialog'
 import { resolveAppRoute } from './appRoute'
@@ -14,7 +14,7 @@ export function AppLayout() {
   const route = resolveAppRoute(location.pathname)
   const [patchOpen, setPatchOpen] = useState(false)
   const [appendOpen, setAppendOpen] = useState(false)
-  const { data, isLoading, isError, isFetching, refetch } = useQuery({
+  const { data, isLoading, isError, isFetching, error, refetch } = useQuery({
     queryKey: ['bootstrap', route.appKey],
     queryFn: () => fetchBootstrap(route.appKey),
     retry: false,
@@ -35,6 +35,7 @@ export function AppLayout() {
   }
 
   if (isError || !data) {
+    const status = error instanceof RecordApiError ? error.status : null
     return (
       <main className="gate">
         <div className="card gate-card">
@@ -45,6 +46,28 @@ export function AppLayout() {
             <>
               <p>无法加载演示模型，请确认后端服务已启动。</p>
               <p className="muted">开发模式下后端默认运行在 http://localhost:8000</p>
+            </>
+          ) : status === 403 ? (
+            <>
+              <p>没有访问权限。</p>
+              <p className="muted">
+                当前账号不是这个系统的成员。可以请所有者把你的账号加入成员，或返回工作台。
+              </p>
+              <p style={{ marginTop: '20px' }}>
+                <Link to="/" className="btn btn-secondary">
+                  返回工作台
+                </Link>
+              </p>
+            </>
+          ) : status === 401 ? (
+            <>
+              <p>请先登录。</p>
+              <p className="muted">登录后即可查看你有权限的系统。</p>
+              <p style={{ marginTop: '20px' }}>
+                <Link to="/login" className="btn btn-primary">
+                  去登录
+                </Link>
+              </p>
             </>
           ) : (
             <>

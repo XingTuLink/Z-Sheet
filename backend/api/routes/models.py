@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy.orm import Session
 
+from backend import audit
 from backend.api.schemas import (
     ModelImportRequest,
     PatchSubmitRequest,
@@ -17,6 +18,8 @@ from backend.api.schemas import (
     VersionDetail,
     VersionMeta,
 )
+from backend.auth import auth_repository as auth_repo
+from backend.auth.permissions import Actor, current_actor, require_editor, require_viewer
 from backend.domain.serialization import model_to_yaml
 from backend.logging_config import get_logger
 from backend.patch.apply import PatchError
@@ -66,7 +69,11 @@ def _validation_error_response(exc: PydanticValidationError) -> JSONResponse:
 
 
 @router.post("/import", status_code=status.HTTP_201_CREATED, response_model=VersionDetail)
-def import_model(body: ModelImportRequest, db: Session = Depends(get_db)) -> Any:
+def import_model(
+    body: ModelImportRequest,
+    actor: Actor = Depends(current_actor),
+    db: Session = Depends(get_db),
+) -> Any:
     try:
         record = repo.import_model(
             db, body.app_key, body.yaml_content, operator=body.operator
@@ -80,11 +87,28 @@ def import_model(body: ModelImportRequest, db: Session = Depends(get_db)) -> Any
         return _validation_error_response(exc)
     except ValueError as exc:  # malformed app_key
         return JSONResponse(status_code=422, content={"detail": str(exc)})
+    if actor.user_id is not None:
+        auth_repo.ensure_owner(db, body.app_key, actor.user_id)
+        app_name = str(
+            (record.snapshot.get("app") or {}).get("name") or body.app_key
+        )
+        audit.record(
+            db,
+            app_key=body.app_key,
+            actor=actor,
+            action=audit.ACTION_APP_CREATE,
+            summary=f"导入系统「{app_name}」（v{record.version}）",
+            detail={"version": record.version},
+        )
     return _version_detail(record)
 
 
 @router.get("/{app_key}", response_model=VersionDetail)
-def get_current_model(app_key: str, db: Session = Depends(get_db)) -> Any:
+def get_current_model(
+    app_key: str,
+    actor: Actor = Depends(require_viewer),
+    db: Session = Depends(get_db),
+) -> Any:
     try:
         record = repo.get_current(db, app_key)
     except repo.AppNotFoundError:
@@ -100,6 +124,7 @@ def get_current_model(app_key: str, db: Session = Depends(get_db)) -> Any:
 def export_current_model(
     app_key: str,
     format: str = Query("yaml", pattern="^(yaml|json)$"),
+    actor: Actor = Depends(require_viewer),
     db: Session = Depends(get_db),
 ) -> Response:
     try:
@@ -123,7 +148,11 @@ def export_current_model(
 
 
 @router.get("/{app_key}/versions", response_model=list[VersionMeta])
-def list_versions(app_key: str, db: Session = Depends(get_db)) -> Any:
+def list_versions(
+    app_key: str,
+    actor: Actor = Depends(require_viewer),
+    db: Session = Depends(get_db),
+) -> Any:
     try:
         records = repo.list_versions(db, app_key)
     except repo.AppNotFoundError:
@@ -136,7 +165,12 @@ def list_versions(app_key: str, db: Session = Depends(get_db)) -> Any:
 
 
 @router.get("/{app_key}/versions/{version:int}", response_model=VersionDetail)
-def get_version(app_key: str, version: int, db: Session = Depends(get_db)) -> Any:
+def get_version(
+    app_key: str,
+    version: int,
+    actor: Actor = Depends(require_viewer),
+    db: Session = Depends(get_db),
+) -> Any:
     try:
         record = repo.get_version(db, app_key, version)
     except repo.AppNotFoundError:
@@ -155,7 +189,10 @@ def get_version(app_key: str, version: int, db: Session = Depends(get_db)) -> An
     response_model=VersionDetail,
 )
 def undo_latest_change(
-    app_key: str, body: RollbackRequest, db: Session = Depends(get_db)
+    app_key: str,
+    body: RollbackRequest,
+    actor: Actor = Depends(require_editor),
+    db: Session = Depends(get_db),
 ) -> Any:
     """Undo the latest change: restore the previous version (append-only)."""
     try:
@@ -186,6 +223,14 @@ def undo_latest_change(
         record.version,
         body.operator,
     )
+    audit.record(
+        db,
+        app_key=app_key,
+        actor=actor,
+        action=audit.ACTION_MODEL_ROLLBACK,
+        summary=f"撤销最新修改：v{current.version}→v{record.version}",
+        detail={"from": current.version, "to": record.version, "target": current.version - 1},
+    )
     return _version_detail(record)
 
 
@@ -198,6 +243,7 @@ def rollback_to_version(
     app_key: str,
     version: int,
     body: RollbackRequest,
+    actor: Actor = Depends(require_editor),
     db: Session = Depends(get_db),
 ) -> Any:
     """Rollback: append a new version equal to any historical snapshot."""
@@ -233,6 +279,14 @@ def rollback_to_version(
         version,
         body.operator,
     )
+    audit.record(
+        db,
+        app_key=app_key,
+        actor=actor,
+        action=audit.ACTION_MODEL_ROLLBACK,
+        summary=f"回滚到历史版本 v{version}（当前 v{record.version}）",
+        detail={"from": current.version, "to": record.version, "target": version},
+    )
     return _version_detail(record)
 
 
@@ -242,7 +296,10 @@ def rollback_to_version(
     response_model=VersionDetail,
 )
 def submit_patch(
-    app_key: str, body: PatchSubmitRequest, db: Session = Depends(get_db)
+    app_key: str,
+    body: PatchSubmitRequest,
+    actor: Actor = Depends(require_editor),
+    db: Session = Depends(get_db),
 ) -> Any:
     """Raw JSON Patch write path.
 
@@ -298,5 +355,13 @@ def submit_patch(
         record.version,
         len(body.ops),
         body.operator,
+    )
+    audit.record(
+        db,
+        app_key=app_key,
+        actor=actor,
+        action=audit.ACTION_MODEL_PATCH,
+        summary=f"模型更新到 v{record.version}：" + (body.source_request or "直接应用修改"),
+        detail={"version": record.version, "ops": len(body.ops)},
     )
     return _version_detail(record)

@@ -60,6 +60,14 @@ export function AdminLayout() {
           >
             版本与发布
           </NavLink>
+          <NavLink
+            to={`${route.basePath}/admin/members`}
+            className={({ isActive }) =>
+              isActive ? 'admin-link active' : 'admin-link'
+            }
+          >
+            成员与权限
+          </NavLink>
         </aside>
         <main className="admin-content">
           {isLoading && <p className="muted">正在加载系统…</p>}

@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy.orm import Session
 
+from backend import audit
 from backend.ai.provider import ChatClient, LLMCallError, LLMConfigError
 from backend.ai.runtime_config import resolve_llm_config
 from backend.api.routes.models import _version_detail
@@ -31,6 +32,7 @@ from backend.api.schemas import (
     PatchUnsupportedOut,
     VersionDetail,
 )
+from backend.auth.permissions import Actor, require_editor
 from backend.logging_config import get_logger
 from backend.patch.apply import PatchError
 from backend.patch.explain import explain_intents
@@ -60,6 +62,7 @@ def _not_found(app_key: str) -> JSONResponse:
 def preview_patch(
     app_key: str,
     body: PatchPreviewRequest,
+    actor: Actor = Depends(require_editor),
     db: Session = Depends(get_db),
     client: ChatClient = Depends(get_chat_client),
 ) -> Any:
@@ -165,6 +168,7 @@ def _load_pending(
 def confirm_patch(
     app_key: str,
     session_id: str,
+    actor: Actor = Depends(require_editor),
     db: Session = Depends(get_db),
 ) -> Any:
     record, error = _load_pending(db, app_key, session_id)
@@ -231,11 +235,28 @@ def confirm_patch(
         new_record.version,
         session_id,
     )
+    audit.record(
+        db,
+        app_key=app_key,
+        actor=actor,
+        action=audit.ACTION_MODEL_PATCH,
+        summary=f"一句话修改到 v{new_record.version}：{payload.user_text}",
+        detail={
+            "from": record.base_version,
+            "to": new_record.version,
+            "ops": len(payload.ops),
+        },
+    )
     return _version_detail(new_record)
 
 
 @router.post("/{session_id}/reject", response_model=PatchDecisionResponse)
-def reject_patch(app_key: str, session_id: str, db: Session = Depends(get_db)) -> Any:
+def reject_patch(
+    app_key: str,
+    session_id: str,
+    actor: Actor = Depends(require_editor),
+    db: Session = Depends(get_db),
+) -> Any:
     record, error = _load_pending(db, app_key, session_id)
     if error is not None or record is None:
         return error

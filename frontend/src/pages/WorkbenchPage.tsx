@@ -3,15 +3,17 @@
 // answers "what did I build and what changed recently" without opening each
 // system.
 
-import { useQueries, useQuery } from '@tanstack/react-query'
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
 import {
+  AppsApiError,
   fetchAppOverview,
   fetchApps,
   type AppSummary,
   type ChangeEvent,
 } from '../api/apps'
+import { fetchMe, logout } from '../api/auth'
 import { BrandLockup, CompanyFooter } from '../components/Brand'
 
 function formatTime(value: string): string {
@@ -45,12 +47,22 @@ function AppCard({ app }: { app: AppSummary }) {
 }
 
 export function WorkbenchPage() {
+  const queryClient = useQueryClient()
+  const me = useQuery({ queryKey: ['me'], queryFn: fetchMe, retry: false })
   const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['apps'],
     queryFn: fetchApps,
+    retry: false,
   })
 
   const apps = data ?? []
+  const needsLogin = isError && error instanceof AppsApiError && error.status === 401
+
+  async function handleLogout() {
+    await logout()
+    queryClient.setQueryData(['me'], { user: null, auth_required: true })
+    void queryClient.invalidateQueries({ queryKey: ['apps'] })
+  }
   const recent = [...apps]
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
     .slice(0, 5)
@@ -82,6 +94,24 @@ export function WorkbenchPage() {
           <BrandLockup logoSize={28} />
         </Link>
         <div className="wb-header-actions">
+          {me.data?.user ? (
+            <span className="wb-account">
+              <span className="muted">
+                {me.data.user.display_name || me.data.user.email}
+              </span>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => void handleLogout()}
+              >
+                退出
+              </button>
+            </span>
+          ) : (
+            <Link to="/login" className="btn btn-secondary">
+              登录
+            </Link>
+          )}
           <Link to="/settings" className="btn btn-secondary">
             模型设置
           </Link>
@@ -108,7 +138,22 @@ export function WorkbenchPage() {
             </div>
           )}
 
-          {isError && (
+          {isError && needsLogin && (
+            <div className="card wb-placeholder">
+              <p>请先登录。</p>
+              <p className="muted">这个工作台已经启用账号，登录后即可查看你有权限的系统。</p>
+              <p className="wb-placeholder-actions">
+                <Link to="/login" className="btn btn-primary">
+                  去登录
+                </Link>
+                <Link to="/app/demo" className="btn btn-secondary">
+                  先看演示系统
+                </Link>
+              </p>
+            </div>
+          )}
+
+          {isError && !needsLogin && (
             <div className="card wb-placeholder">
               <p>无法加载系统列表。</p>
               <p className="muted">

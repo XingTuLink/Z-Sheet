@@ -17,9 +17,12 @@ from backend.ai.runtime_config import resolve_llm_config_safely
 from backend.api.routes import (
     appends,
     apps,
+    audit,
+    auth,
     health,
     ingestion,
     llm,
+    members,
     models,
     patch,
     publications,
@@ -86,7 +89,10 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health.router)
+    app.include_router(auth.router)
     app.include_router(apps.router)
+    app.include_router(members.router)
+    app.include_router(audit.router)
     app.include_router(llm.router)
     app.include_router(models.router)
     app.include_router(runtime.router)

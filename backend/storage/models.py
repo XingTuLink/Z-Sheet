@@ -197,6 +197,101 @@ class LlmProfileRecord(Base):
     )
 
 
+class UserRecord(Base):
+    """Local account of the built-in user system.
+
+    The password is stored only as a salted scrypt hash. Emails are normalized
+    to lower case before they reach the table, so the unique constraint is
+    effectively case-insensitive.
+    """
+
+    __tablename__ = "users"
+    __table_args__ = (UniqueConstraint("email", name="uq_users_email"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+
+class AuthSessionRecord(Base):
+    """One signed-in browser session.
+
+    Only the SHA-256 of the session token is stored, so a leaked database dump
+    cannot be replayed as a login. Signing out sets ``revoked_at``; expired and
+    revoked rows are simply ignored when a cookie arrives.
+    """
+
+    __tablename__ = "auth_sessions"
+    __table_args__ = (
+        UniqueConstraint("token_hash", name="uq_auth_sessions_token"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class AppMemberRecord(Base):
+    """Role of one account on one generated system.
+
+    ``role`` is one of owner / editor / viewer. An app without any row here was
+    created before accounts existed (or by an anonymous bootstrap user): it is
+    reachable by every signed-in account, which is what keeps legacy apps from
+    becoming orphaned.
+    """
+
+    __tablename__ = "app_members"
+    __table_args__ = (
+        UniqueConstraint("app_key", "user_id", name="uq_app_members_identity"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    app_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(16), nullable=False, default="viewer")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+
+class AuditLogRecord(Base):
+    """Append-only trail of important operations on one system.
+
+    ``actor`` snapshots who did it (an email or ``本地用户``) so the entry stays
+    readable even if the account is later removed; ``user_id`` keeps the link
+    back to the account when it still exists.
+    """
+
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    app_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    actor: Mapped[str] = mapped_column(String(255), nullable=False)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    detail: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+
 class AppendBatchRecord(Base):
     """One append-to-existing-entity operation (preview, apply, rollback).
 

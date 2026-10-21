@@ -1,9 +1,11 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 
 import { AdminLayout } from './pages/AdminLayout'
+import { AdminMembersPage } from './pages/AdminMembersPage'
 import { AdminModelPage } from './pages/AdminModelPage'
 import { AdminOverviewPage } from './pages/AdminOverviewPage'
 import { AdminVersionsPage } from './pages/AdminVersionsPage'
+import { LoginPage } from './pages/LoginPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { UnderstandingPage } from './pages/UnderstandingPage'
 import { UploadPage } from './pages/UploadPage'
@@ -18,6 +20,7 @@ const adminRoutes = () => (
     <Route index element={<AdminOverviewPage />} />
     <Route path="model" element={<AdminModelPage />} />
     <Route path="versions" element={<AdminVersionsPage />} />
+    <Route path="members" element={<AdminMembersPage />} />
   </>
 )
 
@@ -28,6 +31,7 @@ export default function App() {
         {/* Workbench: every generated system, plus the entry to a new import. */}
         <Route path="/" element={<WorkbenchPage />} />
         <Route path="/new" element={<UploadPage />} />
+        <Route path="/login" element={<LoginPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         {/* Structured browse of the understanding result before Confirm. */}
         <Route path="/understanding" element={<UnderstandingPage />} />

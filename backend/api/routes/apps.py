@@ -11,12 +11,15 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
+from backend.auth import auth_repository as auth_repo
+from backend.auth import permissions
+from backend.auth.permissions import Actor, require_viewer
 from backend.logging_config import get_logger
 from backend.storage.db import get_db
 from backend.storage.models import (
@@ -252,9 +255,22 @@ def _recent_changes(db: Session, app_key: str, entity_names: dict[str, str]) -> 
 
 
 @router.get("", response_model=list[AppSummary])
-def list_apps(db: Session = Depends(get_db)) -> list[AppSummary]:
-    """Every generated system with the counters shown on a workbench card."""
+def list_apps(
+    request: Request, db: Session = Depends(get_db)
+) -> list[AppSummary]:
+    """Every generated system with the counters shown on a workbench card.
+
+    Signed-in users only see systems they are a member of, plus systems that
+    were created before accounts existed (no membership rows) so nothing
+    disappears after the first registration.
+    """
+    actor = permissions.resolve_actor(request, db)
     versions = _latest_versions(db)
+    allowed = permissions.accessible_app_keys(db, actor)
+    if allowed is not None:
+        unclaimed = {version.app_key for version in versions} - auth_repo.claimed_app_keys(db)
+        allowed = allowed | unclaimed
+        versions = [version for version in versions if version.app_key in allowed]
     stats = _record_stats(db)
     publication_map = _publications(db)
     return [
@@ -275,7 +291,9 @@ def list_apps(db: Session = Depends(get_db)) -> list[AppSummary]:
 
 @router.get("/{app_key}/overview", response_model=AppOverview)
 def app_overview(
-    app_key: str, db: Session = Depends(get_db)
+    app_key: str,
+    actor: Actor = Depends(require_viewer),
+    db: Session = Depends(get_db),
 ) -> AppOverview | JSONResponse:
     """Entity counts, version history size and recent changes of one app."""
     try:

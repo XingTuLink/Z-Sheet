@@ -24,13 +24,18 @@ from backend.ai.provider import (
     probe_llm_connection,
 )
 from backend.ai.runtime_config import SOURCE_DATABASE, SOURCE_ENV
+from backend.auth.permissions import current_actor
 from backend.config import get_settings
 from backend.logging_config import get_logger
 from backend.storage.db import get_db
 from backend.storage.models import LlmProfileRecord
 from backend.storage.repositories import llm_repository
 
-router = APIRouter(prefix="/api/v1/llm", tags=["llm"])
+router = APIRouter(
+    prefix="/api/v1/llm",
+    tags=["llm"],
+    dependencies=[Depends(current_actor)],
+)
 
 logger = get_logger("llm.settings")
 

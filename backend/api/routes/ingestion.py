@@ -22,7 +22,11 @@ from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy.orm import Session
 
+from backend import audit
 from backend.api.schemas import ConfirmResponse
+from backend.auth import auth_repository as auth_repo
+from backend.auth import permissions
+from backend.auth.permissions import Actor, current_actor
 from backend.ingestion.parser import MAX_UPLOAD_BYTES, ParseError, parse_workbook
 from backend.ingestion.template import TEMPLATE_FILENAME, build_template_workbook
 from backend.logging_config import get_logger
@@ -60,6 +64,51 @@ def _too_large() -> JSONResponse:
     return JSONResponse(
         status_code=status.HTTP_413_CONTENT_TOO_LARGE,
         content={"detail": f"文件超过 {MAX_UPLOAD_MB} MB 上限，请拆分或精简后再上传"},
+    )
+
+
+def _guard_existing_app(db: Session, actor: Actor, app_key: str | None) -> None:
+    """Block writes to a system owned by someone else.
+
+    A new app is open to any signed-in account; an existing one requires the
+    editor role. The legacy workspace therefore keeps working for its owner
+    but cannot be overwritten by another account.
+    """
+    target = app_key or confirmation.WORKSPACE_APP_KEY
+    try:
+        existing = model_repository.get_current(db, target, raise_if_missing=False)
+    except ValueError:
+        return
+    if existing is not None:
+        permissions.ensure_role(db, actor, target, auth_repo.ROLE_EDITOR)
+
+
+def _record_creation(
+    db: Session,
+    actor: Actor,
+    summary: confirmation.ConfirmSummary,
+    files: list[str],
+) -> None:
+    """Attach the creator as owner and log the import in the audit trail."""
+    if actor.user_id is not None:
+        auth_repo.ensure_owner(db, summary.app_key, actor.user_id)
+    if summary.version == 1:
+        action = audit.ACTION_APP_CREATE
+        text = f"生成系统「{summary.app_name}」（v1）"
+    else:
+        action = audit.ACTION_MODEL_PATCH
+        text = f"重新导入「{summary.app_name}」，模型更新到 v{summary.version}"
+    audit.record(
+        db,
+        app_key=summary.app_key,
+        actor=actor,
+        action=action,
+        summary=text,
+        detail={
+            "version": summary.version,
+            "files": files,
+            "records": summary.record_counts,
+        },
     )
 
 
@@ -271,6 +320,7 @@ async def confirm_file(
     file: UploadFile = File(...),
     decisions: str = Form(...),
     app_key: str | None = Form(None),
+    actor: Actor = Depends(current_actor),
     db: Session = Depends(get_db),
 ) -> ConfirmResponse | JSONResponse:
     """Day 15: apply review decisions, persist model + rows, return the app.
@@ -284,6 +334,7 @@ async def confirm_file(
     content = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(content) > MAX_UPLOAD_BYTES:
         return _too_large()
+    _guard_existing_app(db, actor, app_key)
 
     try:
         payload = json.loads(decisions)
@@ -336,6 +387,7 @@ async def confirm_file(
         summary.version,
         summary.record_counts,
     )
+    _record_creation(db, actor, summary, [file.filename or "upload"])
     return ConfirmResponse(**summary.model_dump())
 
 
@@ -435,9 +487,11 @@ async def confirm_multiple(
     files: list[UploadFile] = File(...),
     decisions: str = Form(...),
     app_key: str | None = Form(None),
+    actor: Actor = Depends(current_actor),
     db: Session = Depends(get_db),
 ) -> ConfirmResponse | JSONResponse:
     """Apply sheet selection, merge groups and conflict choices, then persist."""
+    _guard_existing_app(db, actor, app_key)
     uploads, error = await _read_uploads(files)
     if error is not None:
         return error
@@ -480,5 +534,8 @@ async def confirm_multiple(
         len(uploads),
         summary.version,
         summary.record_counts,
+    )
+    _record_creation(
+        db, actor, summary, [upload[0] or "upload" for upload in uploads]
     )
     return ConfirmResponse(**summary.model_dump())

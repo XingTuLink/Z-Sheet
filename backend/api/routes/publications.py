@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
+from backend import audit
 from backend.api import runtime_views
 from backend.api.runtime_views import ListParams, list_params
 from backend.api.schemas import (
@@ -26,6 +27,7 @@ from backend.api.schemas import (
     PublicationUpdateRequest,
     RuntimeBootstrapResponse,
 )
+from backend.auth.permissions import Actor, require_editor, require_viewer
 from backend.domain.models import BusinessModel
 from backend.logging_config import get_logger
 from backend.runtime import record_io
@@ -63,7 +65,11 @@ def _serialize(db: Session, record: AppPublicationRecord) -> dict[str, Any]:
     "/{app_key}/publication",
     response_model=PublicationResponse,
 )
-def get_publication(app_key: str, db: Session = Depends(get_db)) -> Any:
+def get_publication(
+    app_key: str,
+    actor: Actor = Depends(require_viewer),
+    db: Session = Depends(get_db),
+) -> Any:
     record = pubs.get_for_app(db, app_key)
     if record is None:
         return _error(status.HTTP_404_NOT_FOUND, "该应用尚未发布")
@@ -76,7 +82,10 @@ def get_publication(app_key: str, db: Session = Depends(get_db)) -> Any:
     status_code=status.HTTP_201_CREATED,
 )
 def create_publication(
-    app_key: str, payload: PublicationRequest, db: Session = Depends(get_db)
+    app_key: str,
+    payload: PublicationRequest,
+    actor: Actor = Depends(require_editor),
+    db: Session = Depends(get_db),
 ) -> Any:
     try:
         record = pubs.create_publication(db, app_key, payload.slug)
@@ -87,6 +96,14 @@ def create_publication(
     except model_repository.AppNotFoundError as exc:
         return _error(status.HTTP_404_NOT_FOUND, str(exc))
     db.commit()
+    audit.record(
+        db,
+        app_key=app_key,
+        actor=actor,
+        action=audit.ACTION_APP_PUBLISH,
+        summary=f"发布公开链接 /p/{record.slug}（v{record.model_version}）",
+        detail={"slug": record.slug, "model_version": record.model_version},
+    )
     return _serialize(db, record)
 
 
@@ -95,7 +112,10 @@ def create_publication(
     response_model=PublicationResponse,
 )
 def update_publication(
-    app_key: str, payload: PublicationUpdateRequest, db: Session = Depends(get_db)
+    app_key: str,
+    payload: PublicationUpdateRequest,
+    actor: Actor = Depends(require_editor),
+    db: Session = Depends(get_db),
 ) -> Any:
     if payload.slug is None and not payload.republish:
         return _error(
@@ -120,6 +140,14 @@ def update_publication(
         db.rollback()
         return _error(status.HTTP_404_NOT_FOUND, str(exc))
     db.commit()
+    audit.record(
+        db,
+        app_key=app_key,
+        actor=actor,
+        action=audit.ACTION_APP_PUBLISH,
+        summary=f"更新公开链接 /p/{record.slug}（v{record.model_version}）",
+        detail={"slug": record.slug, "model_version": record.model_version},
+    )
     return _serialize(db, record)
 
 
@@ -127,13 +155,25 @@ def update_publication(
     "/{app_key}/publication",
     response_model=PublicationResponse,
 )
-def unpublish_publication(app_key: str, db: Session = Depends(get_db)) -> Any:
+def unpublish_publication(
+    app_key: str,
+    actor: Actor = Depends(require_editor),
+    db: Session = Depends(get_db),
+) -> Any:
     record = pubs.get_for_app(db, app_key)
     if record is None:
         return _error(status.HTTP_404_NOT_FOUND, "该应用尚未发布")
     pubs.unpublish(db, record)
     db.commit()
     logger.info("发布下线接口被调用：app=%s", app_key)
+    audit.record(
+        db,
+        app_key=app_key,
+        actor=actor,
+        action=audit.ACTION_APP_UNPUBLISH,
+        summary=f"下线公开链接 /p/{record.slug}",
+        detail={"slug": record.slug},
+    )
     return _serialize(db, record)
 
 
