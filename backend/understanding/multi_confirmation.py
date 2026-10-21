@@ -106,12 +106,14 @@ def confirm_multi(
     raw_decisions: dict[str, Any],
     *,
     llm_client: object | None = _USE_SETTINGS_LLM,
+    app_key: str | None = None,
 ) -> confirmation.ConfirmSummary:
     try:
         decisions = MultiDecisions.model_validate(raw_decisions)
     except Exception as exc:
         raise confirmation.ConfirmError(f"审查决策格式不正确：{exc}") from exc
 
+    target_app_key = confirmation.resolve_app_key(db, app_key)
     understanding = understand_files(db, files, llm_client=llm_client)
     slots = multi_import.slots_of(understanding)
     selected, skipped = _selected(slots, decisions.sheets)
@@ -154,7 +156,7 @@ def confirm_multi(
     try:
         record = model_repository.upsert_model(
             db,
-            confirmation.WORKSPACE_APP_KEY,
+            target_app_key,
             model,
             operator=CONFIRM_OPERATOR,
             source_request=", ".join(name for name, _content in files),
@@ -167,7 +169,7 @@ def confirm_multi(
             for row in entity_rows
         ]
         get_record_store(db).replace_app(
-            confirmation.WORKSPACE_APP_KEY, rows, record.version, commit=False
+            target_app_key, rows, record.version, commit=False
         )
         db.commit()
     except Exception:
@@ -175,7 +177,7 @@ def confirm_multi(
         raise
 
     summary = confirmation.ConfirmSummary(
-        app_key=confirmation.WORKSPACE_APP_KEY,
+        app_key=target_app_key,
         version=record.version,
         app_name=model.app.name,
         links_accepted=accepted,

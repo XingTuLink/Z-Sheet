@@ -71,6 +71,18 @@ def _multi_too_large() -> JSONResponse:
     )
 
 
+def _app_exists(app_key: str | None) -> JSONResponse:
+    """New-system generation collided with an existing app identifier."""
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={
+            "detail": (
+                f"系统标识「{app_key}」已存在；要给已有系统补充数据，请使用「追加数据」"
+            )
+        },
+    )
+
+
 async def _read_uploads(
     files: list[UploadFile],
 ) -> tuple[list[tuple[str, bytes]], JSONResponse | None]:
@@ -258,13 +270,16 @@ async def parse_file_stream(
 async def confirm_file(
     file: UploadFile = File(...),
     decisions: str = Form(...),
+    app_key: str | None = Form(None),
     db: Session = Depends(get_db),
 ) -> ConfirmResponse | JSONResponse:
     """Day 15: apply review decisions, persist model + rows, return the app.
 
     Multipart form:
       file:      the same workbook the user reviewed (pipeline re-runs here);
-      decisions: JSON {"acknowledged": [...], "links": {key: {decision,...}}}.
+      decisions: JSON {"acknowledged": [...], "links": {key: {decision,...}}};
+      app_key:   optional identifier of a new system; omitted means the legacy
+                 workspace app, which keeps appending versions on re-upload.
     """
     content = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(content) > MAX_UPLOAD_BYTES:
@@ -285,8 +300,10 @@ async def confirm_file(
 
     try:
         summary = confirmation.confirm_workbook(
-            db, file.filename or "upload", content, payload
+            db, file.filename or "upload", content, payload, app_key=app_key
         )
+    except model_repository.AppExistsError:
+        return _app_exists(app_key)
     except confirmation.ConfirmError as exc:
         body: dict[str, object] = {"detail": str(exc)}
         if exc.unresolved:
@@ -303,7 +320,11 @@ async def confirm_file(
     except model_repository.VersionConflictError as exc:
         # Another confirm landed first: nothing was written here, so ask the
         # user to retry against the version that actually persisted.
-        logger.warning("确认生成时版本冲突（app=%s）：%s", confirmation.WORKSPACE_APP_KEY, exc)
+        logger.warning(
+            "确认生成时版本冲突（app=%s）：%s",
+            app_key or confirmation.WORKSPACE_APP_KEY,
+            exc,
+        )
         return JSONResponse(
             status_code=status.HTTP_409_CONFLICT, content={"detail": str(exc)}
         )
@@ -413,6 +434,7 @@ async def preview_multiple(
 async def confirm_multiple(
     files: list[UploadFile] = File(...),
     decisions: str = Form(...),
+    app_key: str | None = Form(None),
     db: Session = Depends(get_db),
 ) -> ConfirmResponse | JSONResponse:
     """Apply sheet selection, merge groups and conflict choices, then persist."""
@@ -424,7 +446,11 @@ async def confirm_multiple(
         return payload
 
     try:
-        summary = multi_confirmation.confirm_multi(db, uploads, payload)
+        summary = multi_confirmation.confirm_multi(
+            db, uploads, payload, app_key=app_key
+        )
+    except model_repository.AppExistsError:
+        return _app_exists(app_key)
     except confirmation.ConfirmError as exc:
         body: dict[str, object] = {"detail": str(exc)}
         if exc.unresolved:
@@ -441,7 +467,7 @@ async def confirm_multiple(
     except model_repository.VersionConflictError as exc:
         logger.warning(
             "多文件确认时版本冲突（app=%s）：%s",
-            confirmation.WORKSPACE_APP_KEY,
+            app_key or confirmation.WORKSPACE_APP_KEY,
             exc,
         )
         return JSONResponse(

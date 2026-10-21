@@ -164,6 +164,39 @@ class UnderstandingSessionRecord(Base):
     )
 
 
+class LlmProfileRecord(Base):
+    """One saved LLM connection profile (global, at most one active).
+
+    The API key is stored in this local database so the instance can call the
+    model without a restart, but it is never returned in full: routes only
+    expose a masked form. When no profile is active the app falls back to the
+    ``ZSHEET_LLM_*`` environment variables, so existing deployments behave
+    exactly as before.
+    """
+
+    __tablename__ = "llm_profiles"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_llm_profiles_name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    base_url: Mapped[str] = mapped_column(String(255), nullable=False)
+    api_key: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    timeout: Mapped[float] = mapped_column(nullable=False, default=60.0)
+    enable_thinking: Mapped[bool] = mapped_column(nullable=False, default=True)
+    max_retries: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    is_active: Mapped[bool] = mapped_column(nullable=False, default=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+
 class AppendBatchRecord(Base):
     """One append-to-existing-entity operation (preview, apply, rollback).
 

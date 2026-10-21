@@ -222,6 +222,47 @@ def test_confirm_multi_applies_merge_and_duplicate_key_strategy():
     assert note["type"] == "string"
 
 
+def test_confirm_multi_creates_system_under_requested_app_key():
+    result = _parse([_file_a(), _file_b()])
+    merge = next(item for item in result["merges"] if item["entity_key"] == "order")
+    decisions = {
+        "sheets": [sheet["id"] for sheet in result["sheets"]],
+        "groups": [{"sheets": merge["sheet_ids"]}],
+        "conflicts": {
+            conflict["id"]: (
+                "skip"
+                if conflict["kind"] == "primary_key_duplicate"
+                else conflict["default"]
+            )
+            for conflict in result["conflicts"]
+        },
+        "acknowledged": _acknowledged(result),
+        "links": _links(result),
+    }
+    response = client.post(
+        "/api/v1/ingestion/confirm-multi",
+        files=[
+            ("files", ("华北销售.xlsx", _file_a()[1], XLSX)),
+            ("files", ("华南销售.xlsx", _file_b()[1], XLSX)),
+        ],
+        data={"decisions": json.dumps(decisions), "app_key": "sales-2026"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["app_key"] == "sales-2026"
+    assert client.get("/api/v1/runtime/sales-2026/bootstrap").status_code == 200
+    assert client.get("/api/v1/runtime/workspace/bootstrap").status_code == 404
+
+    repeat = client.post(
+        "/api/v1/ingestion/confirm-multi",
+        files=[
+            ("files", ("华北销售.xlsx", _file_a()[1], XLSX)),
+            ("files", ("华南销售.xlsx", _file_b()[1], XLSX)),
+        ],
+        data={"decisions": json.dumps(decisions), "app_key": "sales-2026"},
+    )
+    assert repeat.status_code == 409, repeat.text
+
+
 def test_confirm_multi_keeping_duplicates_suffixes_the_key():
     result = _parse([_file_a(), _file_b()])
     merge = next(item for item in result["merges"] if item["entity_key"] == "order")

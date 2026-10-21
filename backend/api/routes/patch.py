@@ -21,6 +21,7 @@ from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy.orm import Session
 
 from backend.ai.provider import ChatClient, LLMCallError, LLMConfigError
+from backend.ai.runtime_config import resolve_llm_config
 from backend.api.routes.models import _version_detail
 from backend.api.schemas import (
     PatchChangeOut,
@@ -30,7 +31,6 @@ from backend.api.schemas import (
     PatchUnsupportedOut,
     VersionDetail,
 )
-from backend.config import get_settings
 from backend.logging_config import get_logger
 from backend.patch.apply import PatchError
 from backend.patch.explain import explain_intents
@@ -45,9 +45,9 @@ router = APIRouter(prefix="/api/v1/models/{app_key}/patch-sessions", tags=["patc
 logger = get_logger("patch")
 
 
-def get_chat_client() -> ChatClient:
+def get_chat_client(db: Session = Depends(get_db)) -> ChatClient:
     """Default LLM client; tests override this dependency with a fake."""
-    return ChatClient(get_settings().llm_config)
+    return ChatClient(resolve_llm_config(db))
 
 
 def _not_found(app_key: str) -> JSONResponse:

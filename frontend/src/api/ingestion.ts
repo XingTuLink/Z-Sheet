@@ -386,6 +386,7 @@ async function errorDetail(response: Response, fallback: string): Promise<string
 export async function confirmWorkbook(
   file: File,
   review: ReviewState,
+  appKey: string,
 ): Promise<ConfirmResponse> {
   const decisions = {
     acknowledged: Object.entries(review.acknowledged)
@@ -404,8 +405,18 @@ export async function confirmWorkbook(
   const form = new FormData()
   form.append('file', file)
   form.append('decisions', JSON.stringify(decisions))
+  form.append('app_key', appKey)
 
   return submitConfirm('/api/v1/ingestion/confirm', form)
+}
+
+/**
+ * Identifier of a newly generated system. The key only drives URLs; the
+ * user-facing name comes from the model. Uniqueness is enforced server-side
+ * (409), so a collision surfaces as an actionable error, not a silent merge.
+ */
+export function newAppKey(): string {
+  return `app-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
 }
 
 /** Submit sheet selection, merge groups and conflict choices. */
@@ -413,6 +424,7 @@ export async function confirmMultiple(
   files: File[],
   review: ReviewState,
   plan: ImportPlan,
+  appKey: string,
 ): Promise<ConfirmResponse> {
   const decisions = {
     acknowledged: Object.entries(review.acknowledged)
@@ -434,6 +446,7 @@ export async function confirmMultiple(
   const form = new FormData()
   for (const file of files) form.append('files', file)
   form.append('decisions', JSON.stringify(decisions))
+  form.append('app_key', appKey)
   return submitConfirm('/api/v1/ingestion/confirm-multi', form)
 }
 

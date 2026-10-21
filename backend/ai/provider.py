@@ -105,6 +105,125 @@ def mask_key(api_key: str) -> str:
     return f"{api_key[:4]}...{api_key[-4:]}"
 
 
+@dataclass(frozen=True)
+class LLMProbeResult:
+    """Outcome of a connection test, classified for the settings page.
+
+    ``status`` is one of:
+      ok            address reachable, key accepted, model listed;
+      unreachable   DNS/connection/timeout failure;
+      unauthorized  the service rejected the key (401/403);
+      model_missing address and key work but the model is not offered;
+      unsupported   no ``/models`` endpoint to verify against;
+      error         any other HTTP/protocol failure.
+    """
+
+    status: str
+    detail: str
+    models: tuple[str, ...] = ()
+
+
+# One GET request returning (status code, decoded JSON or None).
+ProbeTransport = Callable[[str, dict[str, str], float], tuple[int, Any]]
+
+
+def _urllib_probe_transport(
+    url: str, headers: dict[str, str], timeout: float
+) -> tuple[int, Any]:
+    request = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read().decode("utf-8", errors="replace")
+            return response.status, _decode_json(body)
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        return exc.code, _decode_json(body)
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, TimeoutError):
+            raise LLMTimeoutError(f"连接超时（{timeout:.0f}s）") from exc
+        raise LLMCallError(f"无法连接：{exc.reason}") from exc
+    except TimeoutError as exc:
+        raise LLMTimeoutError(f"连接超时（{timeout:.0f}s）") from exc
+    except OSError as exc:
+        raise LLMCallError(f"无法连接：{exc}") from exc
+
+
+def _decode_json(body: str) -> Any:
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError:
+        return None
+
+
+def probe_llm_connection(
+    config: LLMConfig,
+    *,
+    transport: ProbeTransport | None = None,
+) -> LLMProbeResult:
+    """Probe an OpenAI-compatible endpoint through ``GET {base}/models``.
+
+    Listing models is cheap (no chat quota) and distinguishes the three
+    failures users actually run into: wrong address, rejected key, missing
+    model. Services without that endpoint report ``unsupported``.
+    """
+    if not config.base_url:
+        return LLMProbeResult("error", "未填写接口地址")
+    if not config.model:
+        return LLMProbeResult("error", "未填写模型名")
+    if not config.available:
+        return LLMProbeResult("unauthorized", "未填写 API Key")
+
+    headers = {"Accept": "application/json"}
+    if config.api_key:
+        headers["Authorization"] = f"Bearer {config.api_key}"
+    url = f"{config.base_url.rstrip('/')}/models"
+    try:
+        status_code, payload = (transport or _urllib_probe_transport)(
+            url, headers, min(config.timeout, 15.0)
+        )
+    except LLMTimeoutError as exc:
+        return LLMProbeResult("unreachable", str(exc))
+    except LLMCallError as exc:
+        return LLMProbeResult("unreachable", str(exc))
+
+    if status_code in (401, 403):
+        return LLMProbeResult("unauthorized", f"API Key 无效（HTTP {status_code}）")
+    if status_code == 404:
+        return LLMProbeResult(
+            "unsupported", "接口地址可用，但未提供 /models 接口，无法校验模型"
+        )
+    if status_code >= 400:
+        return LLMProbeResult("error", f"接口返回 HTTP {status_code}")
+
+    models = _model_ids(payload)
+    if not models:
+        return LLMProbeResult(
+            "ok", "连接成功（接口未返回模型列表，无法核对模型名）"
+        )
+    if config.model not in models:
+        return LLMProbeResult(
+            "model_missing",
+            f"模型「{config.model}」不在该地址的模型列表中",
+            tuple(models),
+        )
+    return LLMProbeResult(
+        "ok", f"连接成功，模型「{config.model}」可用", tuple(models)
+    )
+
+
+def _model_ids(payload: Any) -> list[str]:
+    if not isinstance(payload, dict):
+        return []
+    data = payload.get("data")
+    if not isinstance(data, list):
+        return []
+    return [
+        str(item["id"])
+        for item in data
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    ]
+
+
 def _urllib_transport(
     url: str,
     headers: dict[str, str],

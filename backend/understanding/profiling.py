@@ -146,7 +146,7 @@ def add_profiles(
     force the rules engine.
     """
     from backend.ai.provider import ChatClient
-    from backend.config import get_settings
+    from backend.ai.runtime_config import resolve_llm_config_safely
     from backend.domain.serialization import model_to_dict, model_to_yaml
 
     from .entity_inference import infer_entity
@@ -195,10 +195,12 @@ def add_profiles(
     llm_notes: list[str] = []
     client: object | None
     if llm_client is _USE_SETTINGS_LLM:
-        config = get_settings().llm_config
+        config = resolve_llm_config_safely()
         client = ChatClient(config) if config.available else None
         if client is None:
-            llm_notes.append("未配置可用的 LLM（ZSHEET_LLM_API_KEY），使用规则引擎理解")
+            llm_notes.append(
+                "未配置可用的 LLM（模型设置或 ZSHEET_LLM_API_KEY），使用规则引擎理解"
+            )
     else:
         client = llm_client
     if isinstance(client, ChatClient):

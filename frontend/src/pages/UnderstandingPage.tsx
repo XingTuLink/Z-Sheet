@@ -10,6 +10,7 @@ import {
   loadImportPlan,
   loadReviewState,
   loadUnderstandingResult,
+  newAppKey,
   previewImport,
   saveImportPlan,
   saveReviewState,
@@ -27,7 +28,6 @@ import {
   type UnderstandingResult,
   type UnderstandingSheet,
 } from '../api/ingestion'
-import { WORKSPACE_APP_KEY } from '../api/runtime'
 import { getLastUploadedFiles } from '../api/sessionStore'
 import { BrandLockup, CompanyByline } from '../components/Brand'
 import { ImportPlanPanel } from '../components/ImportPlanPanel'
@@ -660,7 +660,7 @@ export function UnderstandingPage() {
             请先上传一个 Excel 或 CSV 文件；如果表格未能识别出业务实体，可下载标准模板参照整理。
           </p>
           <p style={{ marginTop: '20px', display: 'flex', gap: '12px', justifyContent: 'center' }}>
-            <Link to="/" className="btn btn-primary">
+            <Link to="/new" className="btn btn-primary">
               去上传表格
             </Link>
             <a href={TEMPLATE_URL} download className="btn btn-secondary">
@@ -869,20 +869,19 @@ export function UnderstandingPage() {
       // The server reuses the understanding result cached at parse time for
       // these exact files and only applies the review decisions below; nothing
       // inferred client-side is trusted.
+      // Each confirm creates a separate system; the workbench links back to
+      // every one of them by this key.
+      const appKey = newAppKey()
       if (isMulti) {
         saveImportPlan(activePlan)
-        await confirmMultiple(uploadedFiles, review, activePlan)
+        await confirmMultiple(uploadedFiles, review, activePlan, appKey)
       } else {
-        await confirmWorkbook(uploadedFiles[0], review)
+        await confirmWorkbook(uploadedFiles[0], review, appKey)
       }
-      // Drop the previously rendered system BEFORE leaving the page: the new
-      // confirm replaces both model and rows, so a stale bootstrap (e.g. the
-      // previous upload's entity keys) would otherwise briefly render as a
-      // correct-looking system with zero rows. Removing the cache sends /app
-      // through its loading gate and one fresh bootstrap.
-      queryClient.removeQueries({ queryKey: ['bootstrap', WORKSPACE_APP_KEY] })
-      queryClient.removeQueries({ queryKey: ['versions', WORKSPACE_APP_KEY] })
-      navigate('/app')
+      queryClient.removeQueries({ queryKey: ['bootstrap', appKey] })
+      queryClient.removeQueries({ queryKey: ['versions', appKey] })
+      queryClient.invalidateQueries({ queryKey: ['apps'] })
+      navigate(`/app/${encodeURIComponent(appKey)}`)
     } catch (error) {
       setConfirmError(error instanceof Error ? error.message : '生成失败，请重试。')
       setConfirming(false)
@@ -897,7 +896,7 @@ export function UnderstandingPage() {
       <div className="understanding-inner">
         <header className="understanding-header">
           <div>
-            <Link to="/" className="back-link">
+            <Link to="/new" className="back-link">
               返回上传
             </Link>
             <h1>{result.business_model.app.name} · 理解结果</h1>
@@ -1030,7 +1029,7 @@ export function UnderstandingPage() {
             {uploadedFiles.length === 0 && (
               <p className="confirm-warning">
                 当前会话已丢失上传的文件（页面可能被刷新过）。请
-                <Link to="/">返回重新上传</Link>
+                <Link to="/new">返回重新上传</Link>
                 ，新上传会重置本页审查记录。
               </p>
             )}

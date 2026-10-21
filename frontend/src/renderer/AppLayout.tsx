@@ -7,17 +7,13 @@ import { BrandLockup, CompanyByline, CompanyFooter, LOGO_SRC } from '../componen
 import { AppendDataDialog } from './AppendDataDialog'
 import { resolveAppRoute } from './appRoute'
 import { PatchDialog } from './PatchDialog'
-import { PublishDialog } from './PublishDialog'
 import { RuntimeProvider } from './RuntimeProvider'
-import { VersionHistoryDialog } from './VersionHistoryDialog'
 
 export function AppLayout() {
   const location = useLocation()
   const route = resolveAppRoute(location.pathname)
   const [patchOpen, setPatchOpen] = useState(false)
   const [appendOpen, setAppendOpen] = useState(false)
-  const [historyOpen, setHistoryOpen] = useState(false)
-  const [publishOpen, setPublishOpen] = useState(false)
   const { data, isLoading, isError, isFetching, refetch } = useQuery({
     queryKey: ['bootstrap', route.appKey],
     queryFn: () => fetchBootstrap(route.appKey),
@@ -57,7 +53,7 @@ export function AppLayout() {
                 上传一张 Excel 并完成确认后，这里会用你自己的模型和数据渲染成可浏览的系统。
               </p>
               <p style={{ marginTop: '20px', display: 'flex', gap: '12px', justifyContent: 'center' }}>
-                <Link to="/" className="btn btn-primary">
+                <Link to="/new" className="btn btn-primary">
                   去上传表格
                 </Link>
                 <Link to="/app/demo" className="btn btn-secondary">
@@ -120,33 +116,21 @@ export function AppLayout() {
                 >
                   追加数据
                 </button>
-                <button
-                  type="button"
+                <Link
+                  to={`${route.basePath}/admin`}
                   className="btn btn-secondary btn-patch-entry"
-                  onClick={() => setPublishOpen(true)}
                 >
-                  发布
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-patch-entry"
-                  onClick={() => setHistoryOpen(true)}
-                >
-                  历史版本
-                </button>
+                  管理
+                </Link>
               </>
             )}
-            {route.isDemo ? (
-              <NavLink to="/app" className="nav-link">
-                我的系统
-              </NavLink>
-            ) : (
+            {!route.isDemo && (
               <NavLink to="/app/demo" className="nav-link">
                 演示系统
               </NavLink>
             )}
             <NavLink to="/" className="nav-link nav-link-right">
-              上传表格
+              工作台
             </NavLink>
           </div>
         </header>
@@ -171,17 +155,6 @@ export function AppLayout() {
           appKey={route.appKey}
           basePath={route.basePath}
           onClose={() => setPatchOpen(false)}
-        />
-        <VersionHistoryDialog
-          open={historyOpen}
-          appKey={route.appKey}
-          basePath={route.basePath}
-          onClose={() => setHistoryOpen(false)}
-        />
-        <PublishDialog
-          open={publishOpen}
-          appKey={route.appKey}
-          onClose={() => setPublishOpen(false)}
         />
       </div>
       </RuntimeProvider>

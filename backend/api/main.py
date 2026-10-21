@@ -13,10 +13,13 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from backend.ai.provider import mask_key
+from backend.ai.runtime_config import resolve_llm_config_safely
 from backend.api.routes import (
     appends,
+    apps,
     health,
     ingestion,
+    llm,
     models,
     patch,
     publications,
@@ -61,17 +64,17 @@ def create_app() -> FastAPI:
     configure_logging(settings.log_level)
     app = FastAPI(title="Z-Sheet API", version=PROJECT_VERSION)
 
-    llm = settings.llm_config
+    llm_config = resolve_llm_config_safely()
     logger.info(
         "Z-Sheet %s 启动；LLM endpoint=%s model=%s timeout=%.0fs retries=%d "
-        "部署=%s key=%s",
+        "部署=%s key=%s（模型设置中的启用配置优先，未配置时使用 .env）",
         PROJECT_VERSION,
-        llm.endpoint,
-        llm.model or "(未配置)",
-        llm.timeout,
-        llm.max_retries,
-        "本地" if llm.is_local else "公有云",
-        mask_key(llm.api_key),
+        llm_config.endpoint,
+        llm_config.model or "(未配置)",
+        llm_config.timeout,
+        llm_config.max_retries,
+        "本地" if llm_config.is_local else "公有云",
+        mask_key(llm_config.api_key),
     )
 
     app.add_middleware(
@@ -83,6 +86,8 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health.router)
+    app.include_router(apps.router)
+    app.include_router(llm.router)
     app.include_router(models.router)
     app.include_router(runtime.router)
     app.include_router(ingestion.router)

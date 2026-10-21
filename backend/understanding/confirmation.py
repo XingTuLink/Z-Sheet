@@ -41,10 +41,14 @@ from backend.understanding.profiling import add_profiles
 from backend.understanding.schemas import InferredLink, ProfiledParsedWorkbook
 from backend.understanding.type_inference import _DATE_FORMATS
 
-# V0.1 keeps a single user-generated app ("我的工作区"); re-confirming a new
-# workbook produces a new version of this app.
+# Legacy default app kept for old /app links and callers that omit app_key;
+# new imports pass their own key and create a separate system.
 WORKSPACE_APP_KEY = "workspace"
 CONFIRM_OPERATOR = "confirm"
+
+# Route segments with a fixed meaning; an app key equal to one of these would
+# be shadowed by a static page (workbench, demo, admin).
+RESERVED_APP_KEYS = frozenset({"demo", "admin", "views"})
 
 _CURRENCY_CHARS_RE = re.compile(r"[¥￥$€￠£,\s]|元|块")
 
@@ -346,17 +350,43 @@ def extract_records(
         raise ConfirmError(f"表格数据未通过模型校验：{exc}") from exc
 
 
+def resolve_app_key(db: Session, app_key: str | None) -> str:
+    """Target app of a Confirm: the given new key or the legacy workspace.
+
+    An explicitly requested key must be unused — generation creates a new
+    system, while adding rows to an existing one goes through the append
+    flow. The legacy workspace call keeps appending versions as before.
+    """
+    if app_key is None:
+        return WORKSPACE_APP_KEY
+    if app_key in RESERVED_APP_KEYS:
+        raise ConfirmError(f"「{app_key}」是系统保留标识，请换一个")
+    try:
+        model_repository.validate_app_key(app_key)
+    except ValueError as exc:
+        raise ConfirmError(
+            "系统标识只能包含小写字母、数字、下划线或连字符，且以字母或数字开头"
+        ) from exc
+    if model_repository.get_current(db, app_key, raise_if_missing=False) is not None:
+        raise model_repository.AppExistsError(app_key)
+    return app_key
+
+
 def confirm_workbook(
     db: Session,
     filename: str,
     content: bytes,
     raw_decisions: dict[str, Any],
+    *,
+    app_key: str | None = None,
 ) -> ConfirmSummary:
     """Run the full Confirm pipeline and persist model + rows."""
     try:
         decisions = ConfirmDecisions.model_validate(raw_decisions)
     except Exception as exc:  # malformed decisions payload -> 422
         raise ConfirmError(f"审查决策格式不正确：{exc}") from exc
+
+    target_app_key = resolve_app_key(db, app_key)
 
     try:
         workbook = parse_workbook(filename, content)
@@ -413,7 +443,7 @@ def confirm_workbook(
     try:
         record = model_repository.upsert_model(
             db,
-            WORKSPACE_APP_KEY,
+            target_app_key,
             model,
             operator=CONFIRM_OPERATOR,
             source_request=filename,
@@ -426,7 +456,7 @@ def confirm_workbook(
             for row in entity_rows
         ]
         get_record_store(db).replace_app(
-            WORKSPACE_APP_KEY, rows, record.version, commit=False
+            target_app_key, rows, record.version, commit=False
         )
         db.commit()
     except Exception:
@@ -434,7 +464,7 @@ def confirm_workbook(
         raise
 
     return ConfirmSummary(
-        app_key=WORKSPACE_APP_KEY,
+        app_key=target_app_key,
         version=record.version,
         app_name=model.app.name,
         links_accepted=accepted,
@@ -454,5 +484,6 @@ __all__ = [
     "confirm_workbook",
     "extract_records",
     "missing_link_decisions",
+    "resolve_app_key",
     "unresolved_review_items",
 ]

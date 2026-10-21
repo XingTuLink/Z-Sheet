@@ -127,7 +127,12 @@ def _decisions(
     return {"acknowledged": _acknowledged(result), "links": links}
 
 
-def _confirm(result: dict, *, reject: set[str] | None = None):
+def _confirm(
+    result: dict, *, reject: set[str] | None = None, app_key: str | None = None
+):
+    data = {"decisions": json.dumps(_decisions(result, reject=reject))}
+    if app_key is not None:
+        data["app_key"] = app_key
     return client.post(
         "/api/v1/ingestion/confirm",
         files={
@@ -137,7 +142,7 @@ def _confirm(result: dict, *, reject: set[str] | None = None):
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
         },
-        data={"decisions": json.dumps(_decisions(result, reject=reject))},
+        data=data,
     )
 
 
@@ -184,6 +189,49 @@ def test_confirm_persists_model_and_workbook_rows():
         "customer_to_order",
         "product_to_order",
     }
+
+
+def test_confirm_creates_system_under_requested_app_key():
+    result = _parse_result()
+    resp = _confirm(result, app_key="kehu-guanli")
+    assert resp.status_code == 200, resp.text
+    summary = resp.json()
+    assert summary["app_key"] == "kehu-guanli"
+    assert summary["version"] == 1
+
+    boot = client.get("/api/v1/runtime/kehu-guanli/bootstrap")
+    assert boot.status_code == 200
+    assert boot.json()["version"] == 1
+    assert len(rows(client, "kehu-guanli", "customer")) == 6
+    # The legacy workspace app was not touched by a new-system confirm.
+    assert client.get("/api/v1/runtime/workspace/bootstrap").status_code == 404
+
+
+def test_confirm_rejects_an_existing_app_key():
+    result = _parse_result()
+    assert _confirm(result, app_key="crm").status_code == 200
+
+    again = _confirm(result, app_key="crm")
+    assert again.status_code == 409, again.text
+    assert "已存在" in again.json()["detail"]
+    # The rejected confirm wrote nothing: version 1 is still the only one.
+    versions = client.get("/api/v1/models/crm/versions").json()
+    assert [item["version"] for item in versions] == [1]
+
+
+def test_confirm_rejects_invalid_app_key():
+    result = _parse_result()
+    resp = _confirm(result, app_key="Bad Key")
+    assert resp.status_code == 422, resp.text
+    assert "系统标识" in resp.json()["detail"]
+    assert client.get("/api/v1/runtime/workspace/bootstrap").status_code == 404
+
+
+def test_confirm_rejects_reserved_app_key():
+    result = _parse_result()
+    resp = _confirm(result, app_key="admin")
+    assert resp.status_code == 422, resp.text
+    assert "保留" in resp.json()["detail"]
 
 
 def test_confirm_blocked_until_review_queue_cleared():

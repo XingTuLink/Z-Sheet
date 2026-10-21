@@ -1,21 +1,38 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 
+import { AdminLayout } from './pages/AdminLayout'
+import { AdminModelPage } from './pages/AdminModelPage'
+import { AdminOverviewPage } from './pages/AdminOverviewPage'
+import { AdminVersionsPage } from './pages/AdminVersionsPage'
+import { SettingsPage } from './pages/SettingsPage'
 import { UnderstandingPage } from './pages/UnderstandingPage'
 import { UploadPage } from './pages/UploadPage'
+import { WorkbenchPage } from './pages/WorkbenchPage'
 import { AppLayout } from './renderer/AppLayout'
 import { PublicAppLayout } from './renderer/PublicAppLayout'
 import { IndexRoute, ViewRoute } from './renderer/routeScreens'
+
+// Shared admin children for the legacy workspace and any generated system.
+const adminRoutes = () => (
+  <>
+    <Route index element={<AdminOverviewPage />} />
+    <Route path="model" element={<AdminModelPage />} />
+    <Route path="versions" element={<AdminVersionsPage />} />
+  </>
+)
 
 export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* Day 12: the first screen is upload + understanding progress. */}
-        <Route path="/" element={<UploadPage />} />
-        {/* Day 13: structured browse of the understanding result. */}
+        {/* Workbench: every generated system, plus the entry to a new import. */}
+        <Route path="/" element={<WorkbenchPage />} />
+        <Route path="/new" element={<UploadPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
+        {/* Structured browse of the understanding result before Confirm. */}
         <Route path="/understanding" element={<UnderstandingPage />} />
-        {/* Day 15: /app is the user's confirmed workspace; /app/demo keeps
-            the bundled demo runtime independently browsable. */}
+        {/* /app keeps the legacy workspace; every generated system lives at
+            /app/:appKey and shares the same renderer shell. */}
         <Route path="/app" element={<AppLayout />}>
           <Route index element={<IndexRoute />} />
           <Route path="views/:viewKey" element={<ViewRoute />} />
@@ -24,7 +41,17 @@ export default function App() {
           <Route index element={<IndexRoute />} />
           <Route path="views/:viewKey" element={<ViewRoute />} />
         </Route>
-        {/* Day 33: published read-only apps at custom public links. */}
+        <Route path="/app/admin" element={<AdminLayout />}>
+          {adminRoutes()}
+        </Route>
+        <Route path="/app/:appKey" element={<AppLayout />}>
+          <Route index element={<IndexRoute />} />
+          <Route path="views/:viewKey" element={<ViewRoute />} />
+        </Route>
+        <Route path="/app/:appKey/admin" element={<AdminLayout />}>
+          {adminRoutes()}
+        </Route>
+        {/* Published read-only apps at custom public links. */}
         <Route path="/p/:slug" element={<PublicAppLayout />}>
           <Route index element={<IndexRoute />} />
           <Route path="views/:viewKey" element={<ViewRoute />} />
