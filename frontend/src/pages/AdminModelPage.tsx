@@ -26,6 +26,11 @@ const ROLE_LABELS: Record<FieldRole, string> = {
   text: '文本',
 }
 
+const LINK_TYPE_LABELS: Record<'one_to_many' | 'one_to_one', string> = {
+  one_to_many: '一对多',
+  one_to_one: '一对一',
+}
+
 export function AdminModelPage() {
   const { appKey, isDemo } = resolveAppRoute(useLocation().pathname)
   const { data, isLoading, isError } = useQuery({
@@ -117,6 +122,7 @@ export function AdminModelPage() {
               <tr>
                 <th>从</th>
                 <th>到</th>
+                <th>类型</th>
                 <th>匹配字段</th>
                 <th className="admin-num">置信度</th>
               </tr>
@@ -130,7 +136,13 @@ export function AdminModelPage() {
                 return (
                   <tr key={link.key}>
                     <td>{from?.name ?? entityName(link.from_)}</td>
-                    <td>{to?.name ?? entityName(link.to)}</td>
+                    <td>
+                      {to?.name ?? entityName(link.to)}
+                      {link.from_ === link.to && (
+                        <span className="admin-field-key">自关联</span>
+                      )}
+                    </td>
+                    <td>{LINK_TYPE_LABELS[link.type] ?? link.type}</td>
                     <td>
                       {fromField?.name ?? link.on.from_} → {toField?.name ?? link.on.to}
                     </td>

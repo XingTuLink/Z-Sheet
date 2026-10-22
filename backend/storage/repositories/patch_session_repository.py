@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import secrets
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import CursorResult, select, update
@@ -39,6 +39,9 @@ class PatchSessionPayload(BaseModel):
     requires_confirmation: bool
     notes: list[str]
     operator: str = "local"
+    # Distinguishes a natural-language patch from a visual relationship edit so
+    # confirm can log and label the change correctly.
+    source: Literal["patch", "relationship"] = "patch"
 
 
 def create_session(

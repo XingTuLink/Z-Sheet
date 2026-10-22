@@ -39,6 +39,18 @@ export function DetailView({ view }: { view: DetailViewModel }) {
   const formView = findViewForEntity(model, view.entity, 'form')
   const listTarget = listView ? `${basePath}/views/${listView.key}` : basePath
 
+  // A field used as a link's child-side match key is a foreign key: its value
+  // opens the matching record on the other side of the relation. Self links
+  // resolve to the same entity, which is how "上级" jumps to another employee.
+  function relatedTarget(fieldKey: string): string | null {
+    for (const link of model.links) {
+      if (link.to !== entity!.key || link.on.to !== fieldKey) continue
+      const target = findViewForEntity(model, link.from_, 'detail')
+      if (target) return target.key
+    }
+    return null
+  }
+
   async function handleDelete() {
     if (!entity || !row) return
     const confirmed = window.confirm(`确定删除这条${entity.name}记录吗？此操作会立即保存。`)
@@ -101,14 +113,31 @@ export function DetailView({ view }: { view: DetailViewModel }) {
               <dl className="detail-grid">
                 {entity.fields.map((field) => {
                   const value = row[field.key]
+                  const hasValue =
+                    value !== null &&
+                    value !== undefined &&
+                    String(value).trim() !== ''
+                  const target = hasValue ? relatedTarget(field.key) : null
+                  const display =
+                    field.type === 'enum' && value ? (
+                      <span className="tag">{formatCell(field, value)}</span>
+                    ) : (
+                      formatCell(field, value)
+                    )
                   return (
                     <div className="detail-item" key={field.key}>
                       <dt>{field.name}</dt>
                       <dd>
-                        {field.type === 'enum' && value ? (
-                          <span className="tag">{formatCell(field, value)}</span>
+                        {target ? (
+                          <Link
+                            to={`${basePath}/views/${target}?id=${encodeURIComponent(
+                              String(value),
+                            )}`}
+                          >
+                            {display}
+                          </Link>
                         ) : (
-                          formatCell(field, value)
+                          display
                         )}
                       </dd>
                     </div>

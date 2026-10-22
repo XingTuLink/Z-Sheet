@@ -49,7 +49,7 @@ export interface Link {
   key: string
   from_: string
   to: string
-  type: 'one_to_many'
+  type: 'one_to_many' | 'one_to_one'
   on: LinkOn
   confidence: number
   needs_review?: boolean | null

@@ -53,6 +53,14 @@ export function AdminLayout() {
             模型结构
           </NavLink>
           <NavLink
+            to={`${route.basePath}/admin/relationships`}
+            className={({ isActive }) =>
+              isActive ? 'admin-link active' : 'admin-link'
+            }
+          >
+            关联关系
+          </NavLink>
+          <NavLink
             to={`${route.basePath}/admin/versions`}
             className={({ isActive }) =>
               isActive ? 'admin-link active' : 'admin-link'

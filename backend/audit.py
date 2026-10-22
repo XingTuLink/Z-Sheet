@@ -23,6 +23,7 @@ logger = get_logger("audit")
 # never needs to reword existing history.
 ACTION_APP_CREATE = "app.create"
 ACTION_MODEL_PATCH = "model.patch"
+ACTION_MODEL_RELATION = "model.relation"
 ACTION_MODEL_ROLLBACK = "model.rollback"
 ACTION_DATA_APPEND = "data.append"
 ACTION_DATA_ROLLBACK = "data.rollback"

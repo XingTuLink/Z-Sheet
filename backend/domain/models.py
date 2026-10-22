@@ -135,6 +135,10 @@ class Link(ConfidenceMixin, StrictModel):
         _check_key(self.key, "link key")
         _check_key(self.from_, "link from")
         _check_key(self.to, "link to")
+        if self.from_ == self.to and self.on.from_ == self.on.to:
+            raise ValueError(
+                f"self link {self.key!r} must match two different fields"
+            )
         return self
 
 
@@ -264,10 +268,18 @@ class BusinessModel(StrictModel):
             return entity_map[ref]
 
         link_keys: set[str] = set()
+        link_signatures: set[tuple[str, str, str, str]] = set()
         for link in self.links:
             if link.key in link_keys:
                 errors.append(f"duplicate link key {link.key!r}")
             link_keys.add(link.key)
+            signature = (link.from_, link.to, link.on.from_, link.on.to)
+            if signature in link_signatures:
+                errors.append(
+                    f"duplicate link {link.key!r} between "
+                    f"{link.from_!r} and {link.to!r}"
+                )
+            link_signatures.add(signature)
             source = require_entity(link.from_, f"link {link.key!r} from")
             target = require_entity(link.to, f"link {link.key!r} to")
             if source and link.on.from_ not in source.field_keys():

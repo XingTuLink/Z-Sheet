@@ -34,6 +34,7 @@ class LinkType(StrEnum):
     """Relation cardinality supported in V0.1 (design doc 11.3)."""
 
     ONE_TO_MANY = "one_to_many"
+    ONE_TO_ONE = "one_to_one"
 
 
 class ViewKind(StrEnum):

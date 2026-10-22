@@ -26,6 +26,7 @@ from backend.api.routes import (
     models,
     patch,
     publications,
+    relationships,
     runtime,
 )
 from backend.config import PROJECT_VERSION, get_settings
@@ -99,6 +100,7 @@ def create_app() -> FastAPI:
     app.include_router(ingestion.router)
     app.include_router(appends.router)
     app.include_router(patch.router)
+    app.include_router(relationships.router)
     app.include_router(publications.management_router)
     app.include_router(publications.public_router)
 

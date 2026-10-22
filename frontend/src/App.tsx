@@ -4,6 +4,7 @@ import { AdminLayout } from './pages/AdminLayout'
 import { AdminMembersPage } from './pages/AdminMembersPage'
 import { AdminModelPage } from './pages/AdminModelPage'
 import { AdminOverviewPage } from './pages/AdminOverviewPage'
+import { AdminRelationshipsPage } from './pages/AdminRelationshipsPage'
 import { AdminVersionsPage } from './pages/AdminVersionsPage'
 import { LoginPage } from './pages/LoginPage'
 import { SettingsPage } from './pages/SettingsPage'
@@ -19,6 +20,7 @@ const adminRoutes = () => (
   <>
     <Route index element={<AdminOverviewPage />} />
     <Route path="model" element={<AdminModelPage />} />
+    <Route path="relationships" element={<AdminRelationshipsPage />} />
     <Route path="versions" element={<AdminVersionsPage />} />
     <Route path="members" element={<AdminMembersPage />} />
   </>

@@ -239,8 +239,16 @@ def confirm_patch(
         db,
         app_key=app_key,
         actor=actor,
-        action=audit.ACTION_MODEL_PATCH,
-        summary=f"一句话修改到 v{new_record.version}：{payload.user_text}",
+        action=(
+            audit.ACTION_MODEL_RELATION
+            if payload.source == "relationship"
+            else audit.ACTION_MODEL_PATCH
+        ),
+        summary=(
+            f"关联调整到 v{new_record.version}：{payload.user_text}"
+            if payload.source == "relationship"
+            else f"一句话修改到 v{new_record.version}：{payload.user_text}"
+        ),
         detail={
             "from": record.base_version,
             "to": new_record.version,

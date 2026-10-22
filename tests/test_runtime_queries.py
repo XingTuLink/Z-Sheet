@@ -11,6 +11,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy import UniqueConstraint
 
 from backend.api.main import app
+from backend.domain.models import BusinessModel
+from backend.runtime import query
 from backend.storage.db import SessionLocal
 from backend.storage.models import BusinessRecord
 from backend.storage.record_store import get_record_store
@@ -228,6 +230,74 @@ def test_related_rows_follow_the_link() -> None:
     ).json()
     assert limited["total"] == 2
     assert len(limited["rows"]) == 1
+
+
+def test_related_rows_support_self_link() -> None:
+    model = BusinessModel.model_validate(
+        {
+            "version": "0.1",
+            "app": {"name": "组织"},
+            "entities": [
+                {
+                    "key": "employee",
+                    "name": "员工",
+                    "key_field": "employee_id",
+                    "fields": [
+                        {
+                            "key": "employee_id",
+                            "name": "工号",
+                            "type": "string",
+                            "role": "identifier",
+                            "confidence": 1.0,
+                            "needs_review": False,
+                        },
+                        {
+                            "key": "manager_id",
+                            "name": "上级工号",
+                            "type": "string",
+                            "role": "dimension",
+                            "confidence": 1.0,
+                            "needs_review": False,
+                        },
+                    ],
+                }
+            ],
+            "links": [
+                {
+                    "key": "employee_manager",
+                    "from": "employee",
+                    "to": "employee",
+                    "type": "one_to_one",
+                    "on": {"from": "employee_id", "to": "manager_id"},
+                    "confidence": 1.0,
+                    "needs_review": False,
+                }
+            ],
+        }
+    )
+    rows = [
+        {"employee_id": "E1", "manager_id": ""},
+        {"employee_id": "E2", "manager_id": "E1"},
+        {"employee_id": "E3", "manager_id": "E1"},
+        {"employee_id": "E4", "manager_id": "E2"},
+    ]
+    with SessionLocal() as db:
+        store = get_record_store(db)
+        for row in rows:
+            store.insert_row(
+                "self_link_app", "employee", row["employee_id"], row, 1, commit=False
+            )
+        db.commit()
+        body = query.related_rows(
+            db,
+            model,
+            "self_link_app",
+            parent_entity="employee",
+            link_key="employee_manager",
+            parent_row_key="E1",
+        )
+    assert body["total"] == 2
+    assert {row["employee_id"] for row in body["rows"]} == {"E2", "E3"}
 
 
 def test_dashboard_aggregates_live_rows() -> None:

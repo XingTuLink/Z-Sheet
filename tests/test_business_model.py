@@ -139,6 +139,91 @@ def test_dangling_navigation_view_rejected():
         BusinessModel.model_validate(bad)
 
 
+def _self_link_model(**link_overrides) -> dict:
+    link = {
+        "key": "employee_manager",
+        "from": "employee",
+        "to": "employee",
+        "type": "one_to_one",
+        "on": {"from": "employee_id", "to": "manager_id"},
+        "confidence": 1.0,
+        "needs_review": False,
+    }
+    link.update(link_overrides)
+    return _minimal_model(
+        entities=[
+            {
+                "key": "employee",
+                "name": "员工",
+                "key_field": "employee_id",
+                "fields": [
+                    _field(key="employee_id", name="工号"),
+                    _field(
+                        key="manager_id",
+                        name="上级工号",
+                        role="dimension",
+                    ),
+                ],
+            }
+        ],
+        links=[link],
+    )
+
+
+def test_one_to_one_self_link_is_valid():
+    model = BusinessModel.model_validate(_self_link_model())
+    assert model.links[0].from_ == model.links[0].to
+    assert model.links[0].type.value == "one_to_one"
+
+
+def test_self_link_must_match_two_fields():
+    with pytest.raises(ValidationError, match="different fields"):
+        BusinessModel.model_validate(
+            _self_link_model(on={"from": "employee_id", "to": "employee_id"})
+        )
+
+
+def test_duplicate_link_between_same_fields_rejected():
+    data = _minimal_model(
+        entities=[
+            {
+                "key": "thing",
+                "name": "事物",
+                "key_field": "name",
+                "fields": [_field()],
+            },
+            {
+                "key": "note",
+                "name": "备注",
+                "key_field": "name",
+                "fields": [_field()],
+            },
+        ],
+        links=[
+            {
+                "key": "thing_note",
+                "from": "thing",
+                "to": "note",
+                "type": "one_to_many",
+                "on": {"from": "name", "to": "name"},
+                "confidence": 0.9,
+                "needs_review": False,
+            },
+            {
+                "key": "thing_note_again",
+                "from": "thing",
+                "to": "note",
+                "type": "one_to_many",
+                "on": {"from": "name", "to": "name"},
+                "confidence": 0.9,
+                "needs_review": False,
+            },
+        ],
+    )
+    with pytest.raises(ValidationError, match="duplicate link"):
+        BusinessModel.model_validate(data)
+
+
 def test_dashboard_metric_reference_rejected():
     bad = _minimal_model()
     bad["views"] = [
