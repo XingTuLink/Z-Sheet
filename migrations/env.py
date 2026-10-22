@@ -2,7 +2,7 @@
 
 Dependency direction is strictly one-way:
 
-    env.py -> backend.storage.db (Base, engine) + backend.storage.models (register tables)
+    env.py -> backend.storage.db (Base) + backend.storage.models (register tables)
 
 It never imports backend.api or any application entrypoint, to avoid import
 cycles (see pitfalls doc).
@@ -13,7 +13,7 @@ from __future__ import annotations
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import create_engine, pool
 
 from backend.config import get_settings
 
@@ -22,7 +22,9 @@ from backend.storage import models  # noqa: F401
 from backend.storage.db import Base
 
 config = context.config
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+# Tests and maintenance scripts may point Alembic at a specific database;
+# otherwise the application setting decides (SQLite by default).
+DATABASE_URL = config.get_main_option("sqlalchemy.url") or get_settings().sqlalchemy_url
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -32,29 +34,24 @@ target_metadata = Base.metadata
 
 def run_migrations_offline() -> None:
     context.configure(
-        url=get_settings().database_url,
+        url=DATABASE_URL,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
-        render_as_batch=True,
+        render_as_batch=DATABASE_URL.startswith("sqlite"),
     )
     with context.begin_transaction():
         context.run_migrations()
 
 
 def run_migrations_online() -> None:
-    section = config.get_section(config.config_ini_section, {})
-    connectable = engine_from_config(
-        section,
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    connectable = create_engine(DATABASE_URL, poolclass=pool.NullPool)
     with connectable.connect() as connection:
-        # batch mode is needed for ALTER TABLE support on SQLite.
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
-            render_as_batch=True,
+            # Batch mode is only needed for SQLite's limited ALTER TABLE.
+            render_as_batch=connection.dialect.name == "sqlite",
         )
         with context.begin_transaction():
             context.run_migrations()

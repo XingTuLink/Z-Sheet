@@ -18,8 +18,17 @@ services:
         required: false
     environment:
       ZSHEET_DATA_DIR: /app/data
+      # Empty => SQLite volume; a PostgreSQL URL switches the container over.
+      ZSHEET_DATABASE_URL: ${ZSHEET_DATABASE_URL:-}
     volumes:
       - zsheet-data:/app/data
+    # Optional PostgreSQL backend: enable the "postgres" profile and set
+    # ZSHEET_DATABASE_URL in .env (see .env.example). Without the profile the
+    # dependency is ignored and the app keeps using the SQLite volume.
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
     healthcheck:
       test: ["CMD", "python", "-c", "import json,urllib.request,sys; r=json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)); sys.exit(0 if r.get('status') == 'ok' else 1)"]
       interval: 30s
@@ -27,5 +36,25 @@ services:
       start_period: 20s
       retries: 3
 
+  postgres:
+    image: postgres:17-alpine
+    profiles: ["postgres"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${ZSHEET_PG_USER:-zsheet}
+      POSTGRES_PASSWORD: ${ZSHEET_PG_PASSWORD:-zsheet_dev_pw}
+      POSTGRES_DB: ${ZSHEET_PG_DB:-zsheet}
+    ports:
+      # Exposed for local tests / the SQLite -> PostgreSQL copy tool.
+      - "${ZSHEET_PG_PORT:-5432}:5432"
+    volumes:
+      - zsheet-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ZSHEET_PG_USER:-zsheet} -d ${ZSHEET_PG_DB:-zsheet}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
 volumes:
   zsheet-data:
+  zsheet-pg:

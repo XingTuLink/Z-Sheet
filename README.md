@@ -121,10 +121,10 @@ Z-Sheet 走的是另一条更轻的路径：**你手里那份已经用了很久�
 | 上线方式 | 选型、实施、培训，数周到数月 | 懂平台的人拖拽搭建 | 上传 Excel/CSV，分钟级出系统 |
 | 首批数据 | 空系统，重新录入或付费迁移 | 空模块，自己填 | 表格数据直接入库，第一天就真实 |
 | 后续变更 | 提需求、排期，常按人天收费 | 自己改，但要懂平台概念 | 说一句中文，预览确认后生效 |
-| 数据归属 | 多在厂商云端 | 多在平台云端 | 自有服务器，本地 SQLite 卷 |
+| 数据归属 | 多在厂商云端 | 多在平台云端 | 自有服务器，本地 SQLite 卷或自建 PostgreSQL |
 | 成本 | 账号年费 + 实施服务费 | 平台订阅费 + 搭建人力 | AGPL-3.0 开源，自托管无账号费 |
 
-**数据自主**：单容器部署（FastAPI 同时提供 API 和前端），数据落在本地 SQLite 卷；支持完全离线的本地大模型，数据不出内网。代码以 AGPL-3.0 开源，没有锁定，没有黑盒。
+**数据自主**：单容器部署（FastAPI 同时提供 API 和前端），数据默认落在本地 SQLite 卷，也可切换自建 PostgreSQL；支持完全离线的本地大模型，数据不出内网。代码以 AGPL-3.0 开源，没有锁定，没有黑盒。
 
 **边界也要讲清楚**：Z-Sheet 不打算取代成熟的管理软件——多用户权限体系、审批/工作流/通知、复杂 BI 工作台是后续版本的明确规划。它解决的是更前面、也更普遍的一段路：**一份真实表格 → 团队当天就能用的系统**，而且这套系统不归任何厂商或平台所有。
 
@@ -224,6 +224,22 @@ docker compose down        # 停止，保留数据
 docker compose down -v     # 停止并清空全部数据
 ```
 
+**可选：切换 PostgreSQL**
+
+默认使用容器内 SQLite 卷。需要 PostgreSQL 时启用 `postgres` profile，并在 `.env` 中取消注释 `ZSHEET_DATABASE_URL`（容器内主机名用 `postgres`）：
+
+```bash
+docker compose --profile postgres up -d --build
+```
+
+已有 SQLite 数据可无损迁移到 PostgreSQL（目标库需先执行 `alembic upgrade head`）：
+
+```bash
+uv run python scripts/migrate_sqlite_to_postgres.py \
+  --source data/zsheet.db \
+  --target postgresql+psycopg://zsheet:zsheet_dev_pw@127.0.0.1:5432/zsheet
+```
+
 > Linux 使用本地引擎：容器内访问宿主机的 Ollama 统一用 `host.docker.internal`（需 Compose v2.3+ 或添加 `--add-host`），并注意 Ollama 默认只监听 127.0.0.1。
 
 ## 本地开发
@@ -262,13 +278,14 @@ pnpm dev
 | `ZSHEET_LLM_ENABLE_THINKING` | `true` | 仅 DeepSeek 官方端点发送 thinking 参数 |
 | `ZSHEET_LOG_LEVEL` | `INFO` | 日志级别（DEBUG/INFO/WARNING/ERROR） |
 | `ZSHEET_DATA_DIR` | `./data` | SQLite 与数据目录（容器内固定 `/app/data`） |
+| `ZSHEET_DATABASE_URL` | _空_ | 显式数据库地址；留空用 SQLite，填 PostgreSQL URL 即切换（容器内主机填 `postgres`，本机直跑填 `127.0.0.1`） |
 | `ZSHEET_CORS_ORIGINS` | 本地 5173 | JSON 数组，允许跨域访问 API 的来源 |
 
 ## 架构
 
 **技术栈**
 
-- 后端：Python 3.12 · FastAPI · Pydantic v2 · SQLAlchemy 2 · Alembic · SQLite
+- 后端：Python 3.12 · FastAPI · Pydantic v2 · SQLAlchemy 2 · Alembic · SQLite（默认）/ PostgreSQL（可选）
 - 前端：React · TypeScript · Vite · TanStack Query/Table · React Hook Form
 - AI：自研 Provider 抽象层，兼容 OpenAI 协议，公有云 / 本地引擎可切换
 - 形态：模块化单体（Modular Monolith），单容器交付，无外部中间件依赖

@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ZSHEET_", env_file=".env", extra="ignore")
 
     data_dir: Path = Path("data")
+    # Explicit SQLAlchemy URL (e.g. postgresql://user:pw@host:5432/zsheet).
+    # Empty keeps the SQLite file under data_dir, so local development and
+    # existing installs behave exactly as before.
+    database_url: str = ""
     # JSON array or comma-separated string via env; defaults target the Vite dev server.
     cors_origins: list[str] = DEFAULT_DEV_ORIGINS
 
@@ -42,9 +46,20 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     @property
-    def database_url(self) -> str:
-        # as_posix keeps the SQLite URL valid on Windows (no backslashes).
-        return f"sqlite:///{(self.data_dir / 'zsheet.db').as_posix()}"
+    def sqlalchemy_url(self) -> str:
+        """Resolved database URL; bare postgres URLs get the psycopg driver."""
+        raw = self.database_url.strip()
+        if not raw:
+            # as_posix keeps the SQLite URL valid on Windows (no backslashes).
+            return f"sqlite:///{(self.data_dir / 'zsheet.db').as_posix()}"
+        for prefix in ("postgres://", "postgresql://"):
+            if raw.startswith(prefix):
+                return raw.replace(prefix, "postgresql+psycopg://", 1)
+        return raw
+
+    @property
+    def is_sqlite(self) -> bool:
+        return self.sqlalchemy_url.startswith("sqlite")
 
     @property
     def llm_config(self) -> LLMConfig:

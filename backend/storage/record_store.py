@@ -60,7 +60,7 @@ NUMERIC_TYPES = frozenset({"number", "money"})
 
 
 def _value_expression(field_key: str) -> Any:
-    """Text view of one JSON cell (json_extract on SQLite)."""
+    """Text view of one JSON cell (json_extract on SQLite, ->> on PostgreSQL)."""
     return BusinessRecord.data[field_key].as_string()
 
 
@@ -222,7 +222,12 @@ class RecordStore(ABC):
 
 
 class SqlRecordStore(RecordStore):
-    """SQLAlchemy implementation (SQLite today, PostgreSQL later)."""
+    """SQLAlchemy implementation, shared by SQLite and PostgreSQL.
+
+    The statements stick to portable SQLAlchemy constructs (JSON indexing with
+    ``as_string``, ``cast``, ``nulls_last``), so both dialects execute the same
+    filter/search/sort/facet logic; the full test suite runs on either one.
+    """
 
     def __init__(self, db: Session) -> None:
         self._db = db

@@ -1,12 +1,14 @@
-"""SQLite engine, session factory and FastAPI dependency (SQLAlchemy 2.0).
+"""Database engine, session factory and FastAPI dependency (SQLAlchemy 2.0).
 
-No business tables exist yet on Day 2; table creation arrives with the model
-storage work on Day 3.
+SQLite stays the default (one file under ``data_dir``); setting
+``ZSHEET_DATABASE_URL`` to a PostgreSQL URL switches the whole app over
+without any other change.
 """
 
 from __future__ import annotations
 
 from collections.abc import Generator
+from typing import Any
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
@@ -20,16 +22,16 @@ class Base(DeclarativeBase):
 
 
 def make_engine(database_url: str) -> Engine:
-    return create_engine(
-        database_url,
-        connect_args={"check_same_thread": False},
-        pool_pre_ping=True,
-    )
+    options: dict[str, Any] = {"pool_pre_ping": True}
+    if database_url.startswith("sqlite"):
+        options["connect_args"] = {"check_same_thread": False}
+    return create_engine(database_url, **options)
 
 
 settings = get_settings()
-settings.data_dir.mkdir(parents=True, exist_ok=True)
-engine: Engine = make_engine(settings.database_url)
+if settings.is_sqlite:
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+engine: Engine = make_engine(settings.sqlalchemy_url)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
